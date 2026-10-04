@@ -103,11 +103,24 @@ typedef struct
     bool        placed;                             /* Its absolute position is known */
 } box_t;
 
-/* What a script does with an element (script.c): the variables its group is bound to, its click */
+/* One look of an element: the element as laid out in a state of the page, shown on its conditions */
+#define MAX_VARIANTS        4u
+
+typedef struct
+{
+    node_t*         node;                           /* The element in that state's tree; NULL: not shown then */
+    dmvsi_var_t     var;                            /* Shown while var == value (0: always) ... */
+    int32_t         value;
+    int8_t          pressed;                        /* ... and its box is pressed (1), is not (0); -1: either */
+} variant_t;
+
+/* What a script does with an element (script.c): the variables its group is bound to, its click, its looks */
 typedef struct
 {
     dmvsi_var_t     bind[DMVSI_BIND_COUNT];
     dmvsi_handler_t click;
+    variant_t       variants[MAX_VARIANTS];         /* None: it looks as it is */
+    uint8_t         variant_count;
 } dynamic_t;
 
 struct node
@@ -115,6 +128,7 @@ struct node
     uint8_t     kind;
     uint32_t    index;                              /* Of the elements, in document order (as parsed) */
     dynamic_t*  dynamic;                            /* NULL: what it is it stays */
+    bool        active;                             /* Pressed: :active holds (MOD_ACTIVE) */
     uint8_t     pseudo;
     char*       tag;                                /* Lowercase; NULL for text */
     attr_t*     attrs;
@@ -153,6 +167,7 @@ struct node
 #define PC_ONLY_CHILD       0x0004u
 #define PC_ROOT             0x0008u
 #define PC_EMPTY            0x0010u
+#define PC_ACTIVE           0x0020u                 /* :active - a pressed element (MOD_ACTIVE) */
 #define PC_NEVER            0x8000u                 /* :hover, :active, ... - never in a still page */
 
 typedef struct compound compound_t;
@@ -435,6 +450,7 @@ struct rule_ref
 #define MOD_CLASS_ADD       0u
 #define MOD_CLASS_REMOVE    1u
 #define MOD_STYLE           2u
+#define MOD_ACTIVE          3u                      /* Pressed: it and its ancestors are :active */
 
 typedef struct
 {
@@ -459,11 +475,13 @@ typedef struct
     uint32_t                order;
     font_face_t*            faces;
     bool                    tailwind;               /* The page loads Tailwind CSS (its Play CDN) */
+    bool                    has_active;             /* A rule of :active (a pressed look) */
     int32_t                 vw, vh;                 /* The viewport, 1/64 px */
     int                     status;
     uint32_t                warnings;
     void*                   style_work;             /* style.c's */
     const char*             font_warned;            /* The font file last reported as missing */
+    void*                   states;                 /* script.c's: the page laid out in other states */
 } conv_t;
 
 /* Resources: a URL or a path relative to `base` made absolute (resource_url), and
@@ -493,7 +511,7 @@ const rule_ref_t* css_bucket(const conv_t* c, const char* prefix, const char* na
 
 /* tailwind.c */
 extern const char tailwind_preflight[];
-uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank);
+uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank, bool* active);
 
 /* style.c */
 void    style_compute(conv_t* c, node_t* root);
@@ -513,6 +531,7 @@ void    view_origin(const conv_t* c, int32_t* ox, int32_t* oy);
 
 /* script.c */
 int     script_compile(conv_t* c);
+void    script_free(conv_t* c);                     /* The states it laid out (after painting) */
 
 /* style.c: the transition of a property (TRANSITION_POSITION, _OPACITY) - false when none */
 bool    style_transition(const style_t* st, uint8_t what, uint16_t* ms, int16_t* easing);

@@ -775,6 +775,7 @@ typedef struct
     int32_t         opacity;
     uint16_t        move_ms, fade_ms;
     int16_t         move_easing[4], fade_easing[4];
+    node_t*         look;               /* changed: the element as it looks then (NULL: not shown) */
 } change_t;
 
 /* A class of an element a script asks about (contains, toggle): its variable */
@@ -806,6 +807,8 @@ typedef struct
     dmvsi_action_t  actions[MAX_ACTIONS];
     uint32_t        action_count;
     node_t*         self;               /* `this` of a handler */
+    node_t*         clickables[MAX_MODS];
+    uint32_t        clickable_count;
     uint32_t        inline_depth;
     bool            returned;           /* A return reached: the rest of the function is not run */
     uint32_t        conditional;        /* Inside an IF of run time */
@@ -1494,6 +1497,8 @@ static void handlers(script_t* sc, node_t* n, uint32_t depth)
         if (onclick != NULL && k->style != NULL && k->style->display != DISPLAY_NONE)
         {
             js_t* program = parse(sc->c, onclick, strlen(onclick));
+            if (sc->pass == PASS_CHANGES && sc->clickable_count < MAX_MODS)
+                sc->clickables[sc->clickable_count++] = k;
             sc->self = k;
             sc->action_count = 0;
             sc->scope_count = 0;
@@ -1564,7 +1569,104 @@ static bool has_class(const node_t* n, const char* name)
     return false;
 }
 
-/* What a change does to its element: laid out with it, against the page as it is */
+/* The states laid out, kept for painting their looks (c->states) */
+#define MAX_STATES      48u
+
+typedef struct
+{
+    conv_t*     convs[MAX_STATES];
+    mod_t       mods[MAX_STATES][2];
+    uint32_t    count;
+} states_t;
+
+void script_free(conv_t* c)
+{
+    states_t* st = c->states;
+    if (st == NULL)
+        return;
+    for (uint32_t i = 0; i < st->count; i++)
+    {
+        arena_free(&st->convs[i]->arena);
+        Dmod_Free(st->convs[i]);
+    }
+    Dmod_Free(st);
+    c->states = NULL;
+}
+
+/* The page laid out with up to two changes, kept until it is painted */
+static conv_t* run_state(script_t* sc, const mod_t* a, const mod_t* b, int* status)
+{
+    conv_t* c = sc->c;
+    states_t* st = c->states;
+    if (st == NULL)
+    {
+        if ((st = Dmod_Malloc(sizeof(*st))) == NULL)
+        {
+            *status = -ENOMEM;
+            return NULL;
+        }
+        memset(st, 0, sizeof(*st));
+        c->states = st;
+    }
+    if (st->count >= MAX_STATES)
+    {
+        WARN(c, "script: too many states of the page - the rest not converted\n");
+        return NULL;
+    }
+    conv_t* s = Dmod_Malloc(sizeof(*s));
+    if (s == NULL)
+    {
+        *status = -ENOMEM;
+        return NULL;
+    }
+    memset(s, 0, sizeof(*s));
+    s->options = c->options;
+    s->doc = c->doc;
+    s->vw = c->vw;
+    s->vh = c->vh;
+    s->path = c->path;
+    st->mods[st->count][0] = *a;
+    if (b != NULL)
+        st->mods[st->count][1] = *b;
+    s->mods = st->mods[st->count];
+    s->mod_count = (b != NULL) ? 2U : 1U;
+    st->convs[st->count++] = s;
+    *status = run_layout(s);
+    return (*status == 0) ? s : NULL;
+}
+
+static uint32_t mix(uint32_t h, int32_t v)
+{
+    return (h ^ (uint32_t)v) * 16777619u;
+}
+
+/* A digest of how an element looks, but its opacity: its own style and its inside */
+static uint32_t look_of(const node_t* e)
+{
+    const style_t* st = e->style;
+    uint32_t h = 2166136261u;
+    h = mix(h, (int32_t)st->color);
+    h = mix(h, (int32_t)st->background);
+    h = mix(h, e->box.w);
+    h = mix(h, e->box.h);
+    for (int i = 0; i < 4; i++)
+    {
+        h = mix(h, st->border_w[i]);
+        h = mix(h, (int32_t)st->border_color[i]);
+        h = mix(h, st->radius[i].px);
+    }
+    if (st->background_image != NULL)
+    {
+        for (uint32_t i = 0; i < st->background_image->count; i++)
+            h = mix(h, (int32_t)st->background_image->colors[i]);
+    }
+    for (const frag_t* f = e->box.frags; f != NULL; f = f->next)
+        h = mix(h, f->x + f->y * 7 + (int32_t)f->length);
+    return inside(e, e, h, 0);
+}
+
+/* What a change does to its element: laid out with it, against the page as it is - a move and
+ * a fade (its variables), or another look (painted as it is then) */
 static int lay_out_change(script_t* sc, change_t* ch)
 {
     conv_t* c = sc->c;
@@ -1577,25 +1679,19 @@ static int lay_out_change(script_t* sc, change_t* ch)
         ch->same = true;
     else
     {
-        conv_t* s = Dmod_Malloc(sizeof(*s));
+        int status = 0;
+        conv_t* s = run_state(sc, &ch->mod, NULL, &status);
+        if (status != 0)
+            return status;
+        node_t* f = (s != NULL) ? element_index(s->document, e->index, 0) : NULL;
         if (s == NULL)
-            return -ENOMEM;
-        memset(s, 0, sizeof(*s));
-        s->options = c->options;
-        s->doc = c->doc;
-        s->vw = c->vw;
-        s->vh = c->vh;
-        s->path = c->path;
-        s->mods = &ch->mod;
-        s->mod_count = 1;
-        int status = run_layout(s);
-        node_t* f = (status == 0) ? element_index(s->document, e->index, 0) : NULL;
-        if (status == 0 && (f == NULL || !f->box.placed || f->style == NULL))
+            ch->same = true;
+        else if (f == NULL || !f->box.placed || f->style == NULL || f->style->display == DISPLAY_NONE)
         {
-            ch->changed = true;                 /* Shown, hidden: not as a move */
-            WARN(c, "script: a change shows or hides #%s - not converted\n", (e->id != NULL) ? e->id : e->tag);
+            ch->changed = true;                 /* Hidden then */
+            ch->look = NULL;
         }
-        else if (status == 0)
+        else
         {
             int32_t ox, oy, sx, sy;
             view_origin(c, &ox, &oy);
@@ -1603,24 +1699,69 @@ static int lay_out_change(script_t* sc, change_t* ch)
             ch->dx = (f->box.ax - sx) - (e->box.ax - ox);
             ch->dy = (f->box.ay - sy) - (e->box.ay - oy);
             ch->opacity = f->style->opacity;
-            if (inside(f, f, 2166136261u, 0) != inside(e, e, 2166136261u, 0) || f->box.w != e->box.w || f->box.h != e->box.h)
-                WARN(c, "script: a change lays #%s out anew - only its move and fade are converted\n",
-                     (e->id != NULL) ? e->id : e->tag);
-            /* Its transition then: copied before the arena goes */
+            if (look_of(f) != look_of(e) || !e->box.placed)
+            {
+                ch->changed = true;             /* Another look */
+                ch->look = f;
+            }
             (void)style_transition(f->style, TRANSITION_POSITION, &ch->move_ms, ch->move_easing);
             (void)style_transition(f->style, TRANSITION_OPACITY, &ch->fade_ms, ch->fade_easing);
             after = NULL;
         }
-        arena_free(&s->arena);
-        Dmod_Free(s);
-        if (status != 0)
-            return status;
     }
     if (after != NULL)
     {
         (void)style_transition(after, TRANSITION_POSITION, &ch->move_ms, ch->move_easing);
         (void)style_transition(after, TRANSITION_OPACITY, &ch->fade_ms, ch->fade_easing);
     }
+    return 0;
+}
+
+/* The looks of an element: one per state of its class (that a script changes) and of being pressed */
+static int make_variants(script_t* sc, node_t* e, const change_t* toggled, bool pressable)
+{
+    conv_t* c = sc->c;
+    int status = 0;
+    node_t* pressed = NULL;
+    node_t* pressed_toggled = NULL;
+    mod_t active;
+    memset(&active, 0, sizeof(active));
+    active.element = e->index;
+    active.kind = MOD_ACTIVE;
+    active.name = "";
+    if (pressable)
+    {
+        conv_t* s = run_state(sc, &active, NULL, &status);
+        node_t* f = (s != NULL) ? element_index(s->document, e->index, 0) : NULL;
+        if (f != NULL && f->box.placed && (look_of(f) != look_of(e) || f->style->opacity != e->style->opacity))
+            pressed = f;
+        if (pressed != NULL && toggled != NULL)
+        {
+            s = run_state(sc, &toggled->mod, &active, &status);
+            pressed_toggled = (s != NULL) ? element_index(s->document, e->index, 0) : NULL;
+            if (pressed_toggled != NULL && !pressed_toggled->box.placed)
+                pressed_toggled = NULL;
+        }
+    }
+    if (status != 0 || (toggled == NULL && pressed == NULL))
+        return status;
+    if (e->dynamic == NULL && (e->dynamic = arena_alloc(&c->arena, sizeof(dynamic_t))) == NULL)
+        return -ENOMEM;
+    dynamic_t* d = e->dynamic;
+    classvar_t* cv = (toggled != NULL) ? classvar(sc, e, toggled->mod.name, false) : NULL;
+    dmvsi_var_t var = (cv != NULL) ? cv->var : 0;
+    int32_t base = (toggled != NULL && has_class(e, toggled->mod.name)) ? 1 : 0;
+    variant_t looks[MAX_VARIANTS];
+    uint8_t n = 0;
+    looks[n++] = (variant_t){ e->box.placed ? e : NULL, var, base, (int8_t)((pressed != NULL) ? 0 : -1) };
+    if (toggled != NULL)
+        looks[n++] = (variant_t){ toggled->look, var, 1 - base, (int8_t)((pressed != NULL) ? 0 : -1) };
+    if (pressed != NULL)
+        looks[n++] = (variant_t){ pressed, var, base, 1 };
+    if (pressed != NULL && toggled != NULL)
+        looks[n++] = (variant_t){ pressed_toggled, var, 1 - base, 1 };
+    memcpy(d->variants, looks, n * sizeof(variant_t));
+    d->variant_count = n;
     return 0;
 }
 
@@ -1703,6 +1844,17 @@ int script_compile(conv_t* c)
             status = bind_element(sc, e);
     }
 
+    /* Another look of a class: the class's variable, asked by the looks */
+    sc->pass = PASS_CHANGES;
+    for (uint32_t i = 0; i < sc->change_count; i++)
+    {
+        change_t* ch = &sc->changes[i];
+        if (ch->changed && ch->mod.kind != MOD_STYLE)
+            (void)classvar(sc, ch->element, ch->mod.name, true);
+        else if (ch->changed)
+            WARN(c, "script: a style that changes how #%s looks - not converted\n", (ch->element->id != NULL) ? ch->element->id : ch->element->tag);
+    }
+
     /* The variables of the script: elements as their indices; the classes asked about */
     for (uint32_t i = 0; i < sc->runtime_count && status == 0; i++)
     {
@@ -1721,6 +1873,25 @@ int script_compile(conv_t* c)
         Dmod_SnPrintf(name, sizeof(name), "%s_%s", (cv->element->id != NULL) ? cv->element->id : cv->element->tag, cv->name);
         if ((cv->var = dmvsi_add_var(c->doc, name, has_class(cv->element, cv->name) ? 1 : 0)) == 0)
             status = -ENOMEM;
+    }
+    /* The looks: per element, its first class that changes how it looks, and being pressed */
+    for (uint32_t i = 0; i < sc->change_count && status == 0; i++)
+    {
+        change_t* ch = &sc->changes[i];
+        bool first = ch->changed && ch->mod.kind != MOD_STYLE;
+        for (uint32_t k = 0; k < i && first; k++)
+            first = !(sc->changes[k].element == ch->element && sc->changes[k].changed && sc->changes[k].mod.kind != MOD_STYLE);
+        if (first)
+        {
+            bool pressable = c->has_active && node_attr(ch->element, "onclick") != NULL;
+            status = make_variants(sc, ch->element, ch, pressable);
+        }
+    }
+    for (uint32_t i = 0; i < sc->clickable_count && status == 0; i++)
+    {
+        node_t* e = sc->clickables[i];
+        if (c->has_active && (e->dynamic == NULL || e->dynamic->variant_count == 0))
+            status = make_variants(sc, e, NULL, true);
     }
     if (status == 0)
     {

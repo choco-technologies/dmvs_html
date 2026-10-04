@@ -1243,11 +1243,12 @@ static const struct
     int32_t     min_width;
 } g_breakpoints[] = { { "sm", 640 }, { "md", 768 }, { "lg", 1024 }, { "xl", 1280 }, { "2xl", 1536 } };
 
-uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank)
+uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank, bool* active)
 {
     out_t o = { c, decls, 0, max, false };
     const char* u = name;
     uint32_t variant = 0;
+    *active = false;
 
     /* Variants: "md:hover:bg-x" - every one must hold */
     for (;;)
@@ -1276,6 +1277,12 @@ uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max
                 variant = (uint32_t)i + 1U;
                 known = true;
             }
+        }
+        if (n == 6 && strncmp(u, "active", 6) == 0)
+        {
+            *active = true;             /* Only while it is pressed */
+            c->has_active = true;
+            known = true;
         }
         if (!known && !(n == 11 && strncmp(u, "motion-safe", 11) == 0))
             return 0;                   /* hover:, focus:, dark:, group-hover:, ... */

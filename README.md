@@ -80,14 +80,22 @@ function close() {
 ```
 
 `this` in an `onclick` is its element. Every change is laid out - the page
-with that class or that style - and how the element moves and fades becomes
-its group's variables, set at once or **animated by its CSS `transition`**
-(duration and timing function). The view switches its screens as the page
-does, and slides them as it does.
+with that class or that style:
+
+- how the element **moves and fades** becomes its group's variables, set at
+  once or **animated by its CSS `transition`** (duration and timing
+  function) - the view switches its screens as the page does, and slides
+  them as it does;
+- when it **looks different** (a switch on, a light off, play / pause, an
+  icon hidden, another label) it is painted in each state of its class,
+  shown on the class's variable;
+- `:active` (and Tailwind's `active:`) is its **pressed look**, shown while
+  its box is pressed.
 
 What is reported and left out: what the page does when it loads (timers,
-`Date`, text a script writes), loops, events other than clicks, a change
-that shows or hides an element (`display`) or lays its inside out anew.
+`Date`, text a script writes), loops, events other than clicks, a style a
+script sets that changes how an element looks (but its opacity). A class
+changes only the look of its element - what it moves around it stays.
 
 ## Resources
 

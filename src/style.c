@@ -2032,6 +2032,7 @@ typedef struct
     decl_t*         decls;
     uint32_t        count;
     uint32_t        rank;
+    bool            active;             /* active:x - only while pressed */
 } tw_entry_t;
 
 /* What computing styles needs besides the arena: in the conversion (c->style_work) */
@@ -2101,7 +2102,7 @@ static tw_entry_t* tailwind_entry(conv_t* c, const char* name)
         {
             decl_t decls[MAX_TW_DECLS];
             e->name = name;
-            e->count = tailwind_class(c, name, decls, MAX_TW_DECLS, &e->rank);
+            e->count = tailwind_class(c, name, decls, MAX_TW_DECLS, &e->rank, &e->active);
             if (e->count > 0 && (e->decls = arena_alloc(&c->arena, e->count * sizeof(decl_t))) != NULL)
                 memcpy(e->decls, decls, e->count * sizeof(decl_t));
             else
@@ -2133,6 +2134,8 @@ static uint32_t collect(conv_t* c, const node_t* n, uint8_t pseudo, matched_t* m
             for (uint32_t i = 0; i < n->class_count; i++)
             {
                 tw_entry_t* e = tailwind_entry(c, n->classes[i]);
+                if (e != NULL && e->active && !n->active)
+                    continue;
                 for (uint32_t k = 0; e != NULL && k < e->count && count < MAX_MATCHED; k++)
                 {
                     m[count].decl = &e->decls[k];

@@ -517,6 +517,12 @@ static void apply_mod(conv_t* c, const mod_t* m)
     node_t* n = element_at(c->document, m->element, 0);
     if (n == NULL)
         return;
+    if (m->kind == MOD_ACTIVE)
+    {
+        for (node_t* a = n; a != NULL && a->kind == NODE_ELEMENT; a = a->parent)
+            a->active = true;           /* :active holds for the pressed one and its ancestors */
+        return;
+    }
     if (m->kind == MOD_STYLE)
     {
         /* As element.style.<name> = value does: the style attribute, at its end */
@@ -608,6 +614,7 @@ dmod_dmvsi_dif_api_declaration(1.0, dmvs_html, int, _convert, ( const char* path
         status = script_compile(c);     /* What its scripts do: variables, handlers */
     if (status == 0)
         status = paint_page(c, c->document);
+    script_free(c);
     if (c->arena.failed)
         status = -ENOMEM;
     const char* dump_path = Dmod_GetEnv("DMVS_HTML_DUMP");
