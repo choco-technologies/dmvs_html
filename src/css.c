@@ -311,6 +311,11 @@ static bool parse_pseudo(conv_t* c, const char** p, const char* end, compound_t*
         out->pseudo |= PC_ROOT;
     else if (ieq(name, n, "empty"))
         out->pseudo |= PC_EMPTY;
+    else if (ieq(name, n, "active"))
+    {
+        out->pseudo |= PC_ACTIVE;
+        c->has_active = true;
+    }
     else if (args != NULL && (ieq(name, n, "not") || ieq(name, n, "is") || ieq(name, n, "where") || ieq(name, n, "matches")))
     {
         uint32_t inner = 0;
@@ -557,6 +562,8 @@ static bool compound_matches(const compound_t* k, const node_t* n)
     if ((k->pseudo & PC_ROOT) != 0 && (n->parent == NULL || n->parent->kind != NODE_DOCUMENT))
         return false;
     if ((k->pseudo & PC_EMPTY) != 0 && n->first != NULL)
+        return false;
+    if ((k->pseudo & PC_ACTIVE) != 0 && !n->active)
         return false;
     for (uint8_t i = 0; i < k->not_count; i++)
     {

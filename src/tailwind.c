@@ -35,7 +35,7 @@ enum
     R_BORDER_STYLE, R_BORDER_COLOR, R_BORDER_COLOR_XY, R_BORDER_COLOR_SIDE, R_BG_COLOR, R_BG_IMAGE, R_GRADIENT_FROM,
     R_GRADIENT_VIA, R_GRADIENT_TO, R_PADDING, R_PADDING_XY, R_PADDING_SIDE, R_TEXT_ALIGN, R_VERTICAL_ALIGN,
     R_FONT_FAMILY, R_FONT_SIZE, R_FONT_WEIGHT, R_TEXT_TRANSFORM, R_FONT_STYLE, R_LEADING, R_TRACKING, R_TEXT_COLOR,
-    R_OPACITY, R_SHADOW, R_SHADOW_COLOR, R_BLUR, R_DROP_SHADOW, R_FILTER, R_ARBITRARY
+    R_OPACITY, R_SHADOW, R_SHADOW_COLOR, R_BLUR, R_DROP_SHADOW, R_FILTER, R_TRANSITION, R_DURATION, R_EASE, R_ARBITRARY
 };
 
 static const char g_shades[11][4] = { "50", "100", "200", "300", "400", "500", "600", "700", "800", "900", "950" };
@@ -1108,6 +1108,62 @@ static bool keywords(out_t* o, const char* u, uint32_t* rank)
     return false;
 }
 
+/* transition, transition-<what>, duration-<ms>, ease-<curve> */
+static bool transitions(out_t* o, const char* u, uint32_t* rank)
+{
+    static const struct { char name[12]; char props[160]; } kinds[] = {
+        { "", "color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter" },
+        { "all", "all" }, { "colors", "color, background-color, border-color, text-decoration-color, fill, stroke" },
+        { "opacity", "opacity" }, { "shadow", "box-shadow" }, { "transform", "transform" }, { "none", "none" },
+    };
+    static const struct { char name[8]; char value[32]; } eases[] = {
+        { "linear", "linear" }, { "in", "cubic-bezier(0.4, 0, 1, 1)" }, { "out", "cubic-bezier(0, 0, 0.2, 1)" },
+        { "in-out", "cubic-bezier(0.4, 0, 0.2, 1)" },
+    };
+    const char* v;
+    char value[MAX_VALUE];
+    if (strcmp(u, "transition") == 0 || starts(u, "transition-", &v))
+    {
+        const char* kind = (u[10] == '\0') ? "" : u + 11;
+        for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        {
+            if (strcmp(kinds[i].name, kind) != 0)
+                continue;
+            decl(o, "transition-property", kinds[i].props);
+            if (strcmp(kind, "none") != 0)
+            {
+                decl(o, "transition-timing-function", "cubic-bezier(0.4, 0, 0.2, 1)");
+                decl(o, "transition-duration", "150ms");
+            }
+            *rank = R_TRANSITION;
+            return true;
+        }
+        return false;
+    }
+    if (starts(u, "duration-", &v) && is_number(v))
+    {
+        Dmod_SnPrintf(value, sizeof(value), "%sms", v);
+        decl(o, "transition-duration", value);
+        *rank = R_DURATION;
+        return true;
+    }
+    if (starts(u, "ease-", &v))
+    {
+        const char* e = LOOKUP(eases, v);
+        if (e == NULL)
+            return false;
+        decl(o, "transition-timing-function", e);
+        *rank = R_EASE;
+        return true;
+    }
+    if (starts(u, "delay-", &v))
+    {
+        *rank = R_EASE;
+        return true;                    /* Known: nothing to animate later */
+    }
+    return false;
+}
+
 static bool others(out_t* o, const char* u, bool negative, uint32_t* rank)
 {
     char value[MAX_VALUE];
@@ -1187,11 +1243,12 @@ static const struct
     int32_t     min_width;
 } g_breakpoints[] = { { "sm", 640 }, { "md", 768 }, { "lg", 1024 }, { "xl", 1280 }, { "2xl", 1536 } };
 
-uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank)
+uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank, bool* active)
 {
     out_t o = { c, decls, 0, max, false };
     const char* u = name;
     uint32_t variant = 0;
+    *active = false;
 
     /* Variants: "md:hover:bg-x" - every one must hold */
     for (;;)
@@ -1221,6 +1278,12 @@ uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max
                 known = true;
             }
         }
+        if (n == 6 && strncmp(u, "active", 6) == 0)
+        {
+            *active = true;             /* Only while it is pressed */
+            c->has_active = true;
+            known = true;
+        }
         if (!known && !(n == 11 && strncmp(u, "motion-safe", 11) == 0))
             return 0;                   /* hover:, focus:, dark:, group-hover:, ... */
         u = colon + 1;
@@ -1242,7 +1305,7 @@ uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max
               box_sides(&o, u, 'p', "padding", false, R_PADDING, &r) || sizes(&o, u, negative, &r) ||
               inset(&o, u, negative, &r) || texts(&o, u, &r) || backgrounds(&o, u, &r) || borders(&o, u, &r) ||
               rounded(&o, u, &r) || flexbox(&o, u, &r) || grids(&o, u, &r) || effects(&o, u, negative, &r) ||
-              others(&o, u, negative, &r);
+              transitions(&o, u, &r) || others(&o, u, negative, &r);
     if (!ok)
         return 0;
     *rank = variant * 1000U + r;

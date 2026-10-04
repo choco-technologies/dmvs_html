@@ -152,6 +152,7 @@ typedef struct
     conv_t*     c;
     node_t*     open[MAX_DEPTH];
     uint32_t    depth;
+    uint32_t    elements;               /* Numbered so far */
 } parser_t;
 
 static node_t* current(parser_t* p)
@@ -264,6 +265,7 @@ static const char* start_tag(parser_t* p, const char* s, const char* end)
     if (n == NULL)
         return end;
     n->kind = NODE_ELEMENT;
+    n->index = ++p->elements;
     n->tag = arena_strndup(&c->arena, name, (size_t)(s - name));
     if (n->tag == NULL)
         return end;

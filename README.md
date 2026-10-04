@@ -10,9 +10,9 @@ makes a dmview view of it.
 
 It has its own HTML parser, CSS cascade and layout - no browser, no
 dependencies - so it runs on a PC at build time and on a device. It is made
-for **still UI pages**: the screens a designer (or an AI) draws in HTML with
-Tailwind CSS. Scripts are not run: a page is converted as it is when it
-loads.
+for **UI pages**: the screens a designer (or an AI) draws in HTML with
+Tailwind CSS - and the little JavaScript that switches between them, which
+it works out at conversion and makes the view's variables and handlers.
 
 ## What it does
 
@@ -56,6 +56,47 @@ in Tailwind's style sheet.
 CSS does; text is measured with them as the view will draw it. Icon fonts
 (Font Awesome) work through their CSS: `::before { content: "\f1eb" }`.
 
+## Scripts
+
+A script is not run on the device: what its click handlers do is worked
+out at conversion. Understood is what switches screens and toggles things:
+
+```js
+const home = document.getElementById('home');   // an element
+let current = null;                              // a variable the handlers set: the view's
+function open(id) {                              // onclick="open('settings')": inlined
+    const w = document.getElementById(id);
+    w.classList.add('active');                   // classList.add / remove / toggle
+    home.style.opacity = '0.3';                  // style.<property> = ...
+    current = w;
+}
+function close() {
+    if (current) {                               // if (x), (!x), (a === b), classList.contains()
+        current.classList.remove('active');
+        home.style.opacity = '1';
+        current = null;
+    }
+}
+```
+
+`this` in an `onclick` is its element. Every change is laid out - the page
+with that class or that style:
+
+- how the element **moves and fades** becomes its group's variables, set at
+  once or **animated by its CSS `transition`** (duration and timing
+  function) - the view switches its screens as the page does, and slides
+  them as it does;
+- when it **looks different** (a switch on, a light off, play / pause, an
+  icon hidden, another label) it is painted in each state of its class,
+  shown on the class's variable;
+- `:active` (and Tailwind's `active:`) is its **pressed look**, shown while
+  its box is pressed.
+
+What is reported and left out: what the page does when it loads (timers,
+`Date`, text a script writes), loops, events other than clicks, a style a
+script sets that changes how an element looks (but its opacity). A class
+changes only the look of its element - what it moves around it stays.
+
 ## Resources
 
 Style sheets, fonts and images are files next to the page; a URL is read
@@ -74,8 +115,7 @@ the view is the viewport, or the element the options name (`-r`).
 
 ## What it does not do (yet)
 
-- JavaScript - a page is still; what a script would show (an opened window)
-  is converted when the HTML says it (e.g. a class added).
+- JavaScript beyond the above (see [Scripts](#scripts)).
 - Floats, tables (laid out as blocks), multi-line flex (`flex-wrap`),
   explicit grid placement (only spans), `position: sticky` (relative).
 - Rounded clipping: `overflow: hidden` with `border-radius` clips to the

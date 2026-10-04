@@ -103,9 +103,32 @@ typedef struct
     bool        placed;                             /* Its absolute position is known */
 } box_t;
 
+/* One look of an element: the element as laid out in a state of the page, shown on its conditions */
+#define MAX_VARIANTS        4u
+
+typedef struct
+{
+    node_t*         node;                           /* The element in that state's tree; NULL: not shown then */
+    dmvsi_var_t     var;                            /* Shown while var == value (0: always) ... */
+    int32_t         value;
+    int8_t          pressed;                        /* ... and its box is pressed (1), is not (0); -1: either */
+} variant_t;
+
+/* What a script does with an element (script.c): the variables its group is bound to, its click, its looks */
+typedef struct
+{
+    dmvsi_var_t     bind[DMVSI_BIND_COUNT];
+    dmvsi_handler_t click;
+    variant_t       variants[MAX_VARIANTS];         /* None: it looks as it is */
+    uint8_t         variant_count;
+} dynamic_t;
+
 struct node
 {
     uint8_t     kind;
+    uint32_t    index;                              /* Of the elements, in document order (as parsed) */
+    dynamic_t*  dynamic;                            /* NULL: what it is it stays */
+    bool        active;                             /* Pressed: :active holds (MOD_ACTIVE) */
     uint8_t     pseudo;
     char*       tag;                                /* Lowercase; NULL for text */
     attr_t*     attrs;
@@ -144,6 +167,7 @@ struct node
 #define PC_ONLY_CHILD       0x0004u
 #define PC_ROOT             0x0008u
 #define PC_EMPTY            0x0010u
+#define PC_ACTIVE           0x0020u                 /* :active - a pressed element (MOD_ACTIVE) */
 #define PC_NEVER            0x8000u                 /* :hover, :active, ... - never in a still page */
 
 typedef struct compound compound_t;
@@ -275,6 +299,14 @@ struct font_face
 
 #define MAX_SHADOWS         4u
 #define MAX_TRACKS          12u
+#define MAX_TRANSITIONS     12u
+
+/* What a transition animates (of what dmview can: a box's position and opacity) */
+#define TRANSITION_NONE     0u
+#define TRANSITION_ALL      1u
+#define TRANSITION_POSITION 2u                      /* top, left, right, bottom, inset, margin, transform, translate */
+#define TRANSITION_OPACITY  3u
+#define TRANSITION_OTHER    4u
 
 typedef struct
 {
@@ -362,6 +394,13 @@ struct style
     uint8_t     text_align, text_transform, white_space, valign;
     int32_t     valign_by;
 
+    uint8_t     transition_count;                   /* transition-property, -duration, -timing-function */
+    uint8_t     transition_props[MAX_TRANSITIONS];  /* TRANSITION_* */
+    uint8_t     duration_count;
+    uint16_t    transition_ms[MAX_TRANSITIONS];
+    uint8_t     timing_count;
+    int16_t     transition_easing[MAX_TRANSITIONS][4];
+
     shadow_t    shadows[MAX_SHADOWS];               /* box-shadow, the first on top */
     uint8_t     shadow_count;
     shadow_t    drops[MAX_SHADOWS];                 /* filter: drop-shadow() */
@@ -407,10 +446,26 @@ struct rule_ref
     rule_t*         rule;
 };
 
+/* What a script changes of an element, for laying the page out as it is then */
+#define MOD_CLASS_ADD       0u
+#define MOD_CLASS_REMOVE    1u
+#define MOD_STYLE           2u
+#define MOD_ACTIVE          3u                      /* Pressed: it and its ancestors are :active */
+
+typedef struct
+{
+    uint32_t        element;                        /* Its index */
+    uint8_t         kind;
+    const char*     name;                           /* A class, a property */
+    const char*     value;
+} mod_t;
+
 typedef struct
 {
     arena_t                 arena;
     const char*             path;                   /* The page */
+    const mod_t*            mods;                   /* Applied after parsing (run_layout()) */
+    uint32_t                mod_count;
     const dmvsi_options_t*  options;
     dmvsi_doc_t             doc;
     node_t*                 document;
@@ -420,11 +475,13 @@ typedef struct
     uint32_t                order;
     font_face_t*            faces;
     bool                    tailwind;               /* The page loads Tailwind CSS (its Play CDN) */
+    bool                    has_active;             /* A rule of :active (a pressed look) */
     int32_t                 vw, vh;                 /* The viewport, 1/64 px */
     int                     status;
     uint32_t                warnings;
     void*                   style_work;             /* style.c's */
     const char*             font_warned;            /* The font file last reported as missing */
+    void*                   states;                 /* script.c's: the page laid out in other states */
 } conv_t;
 
 /* Resources: a URL or a path relative to `base` made absolute (resource_url), and
@@ -454,7 +511,7 @@ const rule_ref_t* css_bucket(const conv_t* c, const char* prefix, const char* na
 
 /* tailwind.c */
 extern const char tailwind_preflight[];
-uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank);
+uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank, bool* active);
 
 /* style.c */
 void    style_compute(conv_t* c, node_t* root);
@@ -468,6 +525,19 @@ bool    image_size(const char* path, int32_t* width, int32_t* height);
 
 /* paint.c */
 int     paint_page(conv_t* c, node_t* root);
+node_t* find_id(node_t* n, const char* id, uint32_t depth);
+dmvsi_rect_t group_rect(const conv_t* c, const node_t* n, int32_t ox, int32_t oy);
+void    view_origin(const conv_t* c, int32_t* ox, int32_t* oy);
+
+/* script.c */
+int     script_compile(conv_t* c);
+void    script_free(conv_t* c);                     /* The states it laid out (after painting) */
+
+/* style.c: the transition of a property (TRANSITION_POSITION, _OPACITY) - false when none */
+bool    style_transition(const style_t* st, uint8_t what, uint16_t* ms, int16_t* easing);
+
+/* dmvs_html.c: a page laid out as it is, or with what a script changed (state.c) */
+int     run_layout(conv_t* c);
 
 #define WARN(c, ...)    do { (c)->warnings++; DMOD_LOG_WARN("dmvs_html: " __VA_ARGS__); } while (0)
 
