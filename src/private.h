@@ -424,6 +424,7 @@ typedef struct
     int                     status;
     uint32_t                warnings;
     void*                   style_work;             /* style.c's */
+    const char*             font_warned;            /* The font file last reported as missing */
 } conv_t;
 
 /* Resources: a URL or a path relative to `base` made absolute (resource_url), and

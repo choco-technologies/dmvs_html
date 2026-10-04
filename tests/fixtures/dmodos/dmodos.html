@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>dmodOS - 272x480 UI</title>
+    
+    <!-- Tailwind CSS dla szybkiego i nowoczesnego stylowania -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome dla ikon -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e; /* Ciemne tło poza urządzeniem */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* Ramka urządzenia dla lepszej prezentacji */
+        .device-bezel {
+            background: #0f0f11;
+            padding: 30px 40px;
+            border-radius: 24px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7),
+                        inset 0 1px 1px rgba(255, 255, 255, 0.1);
+            border: 2px solid #2a2a35;
+            position: relative;
+        }
+
+        /* Główny ekran systemu operacyjnego - ścisłe wymiary 272x480 (pion) */
+        .os-screen {
+            width: 272px;
+            height: 480px;
+            background: linear-gradient(135deg, #2b5876 0%, #4e4376 100%);
+            position: relative;
+            overflow: hidden;
+            border-radius: 4px;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+            color: white;
+        }
+
+        /* Efekt szkła (Glassmorphism) */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+        }
+
+        /* Animacje przejść okien */
+        .app-window {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transition: top 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .app-window.active {
+            top: 0;
+        }
+
+        /* Przycisk dotykowy (efekt kliknięcia) */
+        .touch-btn {
+            transition: transform 0.1s, opacity 0.1s;
+        }
+        .touch-btn:active {
+            transform: scale(0.92);
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="device-bezel">
+        <!-- Ekran główny systemu 272x480 -->
+        <div class="os-screen" id="os-screen">
+            
+            <!-- Pasek stanu (Status Bar) -->
+            <div class="h-6 px-3 w-full bg-black/30 backdrop-blur-md flex justify-between items-center text-[11px] font-medium z-10 relative">
+                <div class="flex items-center gap-2">
+                    <span id="clock" class="font-semibold tracking-wide">12:00</span>
+                    <span class="text-white/70">dmodOS</span>
+                </div>
+                <div class="flex items-center gap-3 text-white/90">
+                    <i class="fa-solid fa-wifi text-[10px]"></i>
+                    <i class="fa-brands fa-bluetooth-b text-[11px]"></i>
+                    <div class="flex items-center gap-1">
+                        <span>84%</span>
+                        <i class="fa-solid fa-battery-three-quarters text-[12px]"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ekran Domowy (Home Screen) -->
+            <div id="home-screen" class="absolute top-6 left-0 w-full h-[454px] p-4 flex flex-col gap-4 transition-opacity duration-300">
+                <!-- Lewa kolumna -> Góra: Widget Czasu i Pogody -->
+                <div class="w-full flex flex-col gap-3">
+                    <div class="glass-panel p-4 flex flex-col justify-center items-center shadow-lg relative overflow-hidden h-28">
+                        <div class="absolute top-0 right-0 w-24 h-24 bg-yellow-400/20 rounded-full blur-xl -mr-10 -mt-10"></div>
+                        <h1 id="widget-time" class="text-5xl font-bold tracking-tighter drop-shadow-md">12:00</h1>
+                        <p id="widget-date" class="text-xs text-white/80 font-medium mt-1">Poniedziałek, 17 Lip</p>
+                    </div>
+                    <div class="glass-panel p-3 h-14 flex items-center justify-between px-4 shadow-lg touch-btn cursor-pointer" onclick="openApp('app-weather')">
+                        <div class="flex items-center gap-3">
+                            <i class="fa-solid fa-cloud-sun text-2xl text-yellow-300 drop-shadow"></i>
+                            <div class="flex flex-col">
+                                <span class="text-sm font-semibold">22°C</span>
+                                <span class="text-[10px] text-white/70">Banino, PL</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Prawa kolumna -> Dół: Siatka Aplikacji -->
+                <div class="grid grid-cols-3 gap-y-4 gap-x-2 mt-2">
+                    <button class="flex flex-col items-center justify-start gap-1.5 touch-btn transition-all" onclick="openApp('app-settings')">
+                        <div class="w-12 h-12 rounded-xl glass-panel bg-gradient-to-br from-gray-600 to-gray-800 flex items-center justify-center shadow-inner border border-white/10">
+                            <i class="fa-solid fa-gear text-xl text-gray-200"></i>
+                        </div>
+                        <span class="text-[10px] font-medium text-white/90">Ustawienia</span>
+                    </button>
+                    
+                    <button class="flex flex-col items-center justify-start gap-1.5 touch-btn transition-all" onclick="openApp('app-system')">
+                        <div class="w-12 h-12 rounded-xl glass-panel bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center shadow-inner border border-white/10">
+                            <i class="fa-solid fa-microchip text-xl text-white"></i>
+                        </div>
+                        <span class="text-[10px] font-medium text-white/90">System</span>
+                    </button>
+
+                    <button class="flex flex-col items-center justify-start gap-1.5 touch-btn transition-all" onclick="openApp('app-music')">
+                        <div class="w-12 h-12 rounded-xl glass-panel bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center shadow-inner border border-white/10">
+                            <i class="fa-solid fa-music text-xl text-white"></i>
+                        </div>
+                        <span class="text-[10px] font-medium text-white/90">Muzyka</span>
+                    </button>
+
+                    <button class="flex flex-col items-center justify-start gap-1.5 touch-btn transition-all" onclick="openApp('app-home')">
+                        <div class="w-12 h-12 rounded-xl glass-panel bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shadow-inner border border-white/10">
+                            <i class="fa-solid fa-house-signal text-xl text-white"></i>
+                        </div>
+                        <span class="text-[10px] font-medium text-white/90">Smart Dom</span>
+                    </button>
+                    
+                    <!-- Aplikacja Sklep -->
+                    <button class="flex flex-col items-center justify-start gap-1.5 touch-btn transition-all" onclick="openApp('app-store')">
+                        <div class="w-12 h-12 rounded-xl glass-panel bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shadow-inner border border-white/10">
+                            <i class="fa-solid fa-shop text-xl text-white"></i>
+                        </div>
+                        <span class="text-[10px] font-medium text-white/90">Sklep</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- === OKNA APLIKACJI === -->
+            
+            <!-- Aplikacja: Ustawienia -->
+            <div id="app-settings" class="app-window bg-gray-900">
+                <div class="h-10 bg-gray-800 flex items-center px-2 border-b border-white/10 shrink-0">
+                    <button class="w-10 h-8 flex items-center justify-center touch-btn rounded hover:bg-white/10" onclick="closeApp()">
+                        <i class="fa-solid fa-chevron-left text-blue-400"></i>
+                    </button>
+                    <span class="font-semibold text-sm ml-2">Ustawienia</span>
+                </div>
+                <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
+                    <div class="bg-gray-800 rounded-lg p-3 flex justify-between items-center border border-white/5 touch-btn cursor-pointer">
+                        <div class="flex items-center gap-3">
+                            <i class="fa-solid fa-wifi text-blue-400 w-5 text-center"></i>
+                            <span class="text-sm">Wi-Fi</span>
+                        </div>
+                        <div class="w-8 h-4 bg-blue-500 rounded-full relative">
+                            <div class="absolute right-0.5 top-0.5 w-3 h-3 bg-white rounded-full"></div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-3 flex justify-between items-center border border-white/5 touch-btn cursor-pointer">
+                        <div class="flex items-center gap-3">
+                            <i class="fa-brands fa-bluetooth-b text-blue-400 w-5 text-center"></i>
+                            <span class="text-sm">Bluetooth</span>
+                        </div>
+                        <div class="w-8 h-4 bg-gray-600 rounded-full relative">
+                            <div class="absolute left-0.5 top-0.5 w-3 h-3 bg-gray-400 rounded-full"></div>
+                        </div>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-3 flex justify-between items-center border border-white/5 touch-btn cursor-pointer">
+                        <div class="flex items-center gap-3">
+                            <i class="fa-solid fa-display text-gray-300 w-5 text-center"></i>
+                            <span class="text-sm">Jasność ekranu</span>
+                        </div>
+                        <span class="text-xs text-gray-400">80%</span>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-3 flex justify-between items-center border border-white/5 touch-btn cursor-pointer mt-2">
+                        <div class="flex items-center gap-3">
+                            <i class="fa-solid fa-circle-info text-gray-300 w-5 text-center"></i>
+                            <span class="text-sm">O systemie dmodOS</span>
+                        </div>
+                        <i class="fa-solid fa-chevron-right text-gray-500 text-xs"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Aplikacja: System (Statystyki) -->
+            <div id="app-system" class="app-window bg-slate-900">
+                <div class="h-10 bg-slate-800 flex items-center px-2 border-b border-white/10 shrink-0">
+                    <button class="w-10 h-8 flex items-center justify-center touch-btn rounded hover:bg-white/10" onclick="closeApp()">
+                        <i class="fa-solid fa-chevron-left text-blue-400"></i>
+                    </button>
+                    <span class="font-semibold text-sm ml-2">Zasoby Systemu</span>
+                </div>
+                <div class="flex-1 p-4 flex flex-col gap-4">
+                    <!-- CPU -->
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-gray-300"><i class="fa-solid fa-microchip mr-1"></i> CPU</span>
+                            <span class="text-cyan-400 font-bold">24%</span>
+                        </div>
+                        <div class="w-full bg-slate-700 rounded-full h-2">
+                            <div class="bg-cyan-500 h-2 rounded-full" style="width: 24%"></div>
+                        </div>
+                    </div>
+                    <!-- RAM -->
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-gray-300"><i class="fa-solid fa-memory mr-1"></i> RAM</span>
+                            <span class="text-emerald-400 font-bold">112 / 256 MB</span>
+                        </div>
+                        <div class="w-full bg-slate-700 rounded-full h-2">
+                            <div class="bg-emerald-500 h-2 rounded-full" style="width: 45%"></div>
+                        </div>
+                    </div>
+                    <!-- Pamięć Flash -->
+                    <div>
+                        <div class="flex justify-between text-xs mb-1">
+                            <span class="text-gray-300"><i class="fa-solid fa-hard-drive mr-1"></i> Flash</span>
+                            <span class="text-purple-400 font-bold">1.2 / 4.0 GB</span>
+                        </div>
+                        <div class="w-full bg-slate-700 rounded-full h-2">
+                            <div class="bg-purple-500 h-2 rounded-full" style="width: 30%"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-auto text-center">
+                        <span class="text-[10px] text-slate-500">Uptime: 04:12:33 • Temp: 42°C</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Aplikacja: Sklep (Nowa) -->
+            <div id="app-store" class="app-window bg-slate-900">
+                <div class="h-10 bg-slate-800 flex items-center px-2 border-b border-white/10 shrink-0">
+                    <button class="w-10 h-8 flex items-center justify-center touch-btn rounded hover:bg-white/10" onclick="closeApp()">
+                        <i class="fa-solid fa-chevron-left text-blue-400"></i>
+                    </button>
+                    <span class="font-semibold text-sm ml-2">Sklep dmodOS</span>
+                </div>
+                <div class="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+                    <!-- Banner -->
+                    <div class="h-24 bg-gradient-to-r from-blue-600 to-indigo-700 rounded-xl p-3 relative overflow-hidden flex flex-col justify-end shadow-md">
+                        <i class="fa-solid fa-gamepad absolute top-2 right-2 text-5xl text-white/20"></i>
+                        <h3 class="text-white font-bold text-sm">Gry Retro</h3>
+                        <p class="text-white/70 text-[10px]">Odkryj nowości w dmodOS</p>
+                    </div>
+                    
+                    <h4 class="text-[10px] font-semibold text-gray-400 mt-1 uppercase tracking-wider">Polecane Aplikacje</h4>
+                    
+                    <!-- Lista Apek -->
+                    <div class="bg-gray-800 rounded-lg p-2.5 flex justify-between items-center border border-white/5">
+                        <div class="flex items-center gap-3">
+                            <div class="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center shadow-inner">
+                                <i class="fa-solid fa-calculator text-white"></i>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-sm font-medium">Kalkulator</span>
+                                <span class="text-[9px] text-gray-400">Narzędzia</span>
+                            </div>
+                        </div>
+                        <button class="px-3 py-1.5 bg-blue-600 text-white text-[9px] font-bold rounded-full touch-btn">POBIERZ</button>
+                    </div>
+
+                    <div class="bg-gray-800 rounded-lg p-2.5 flex justify-between items-center border border-white/5">
+                        <div class="flex items-center gap-3">
+                            <div class="w-9 h-9 bg-green-500 rounded-lg flex items-center justify-center shadow-inner">
+                                <i class="fa-solid fa-message text-white"></i>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-sm font-medium">Chat dmod</span>
+                                <span class="text-[9px] text-gray-400">Komunikacja</span>
+                            </div>
+                        </div>
+                        <button class="px-3 py-1.5 bg-white/10 text-white text-[9px] font-bold rounded-full touch-btn">OTWÓRZ</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Aplikacja: Odtwarzacz Muzyki (Dopasowana do pionu) -->
+            <div id="app-music" class="app-window bg-neutral-900">
+                <div class="h-10 flex items-center px-2 shrink-0 z-10">
+                    <button class="w-10 h-8 flex items-center justify-center touch-btn rounded hover:bg-white/10" onclick="closeApp()">
+                        <i class="fa-solid fa-chevron-left text-white"></i>
+                    </button>
+                </div>
+                
+                <div class="absolute inset-0 bg-gradient-to-b from-purple-900/40 to-neutral-900 pointer-events-none"></div>
+                
+                <div class="flex-1 flex flex-col items-center justify-center px-6 pb-12 z-10">
+                    <div class="w-32 h-32 rounded-lg bg-gradient-to-tr from-purple-600 to-pink-500 shadow-xl shadow-purple-900/30 flex items-center justify-center mb-6 border border-white/10">
+                        <i class="fa-solid fa-compact-disc text-6xl text-white/50"></i>
+                    </div>
+                    
+                    <h2 class="text-lg font-bold text-white">Retro Synthwave</h2>
+                    <p class="text-xs text-gray-400 mb-6">Artysta Nieznany</p>
+                    
+                    <div class="w-full flex items-center gap-2 mt-2">
+                        <span class="text-[9px] text-gray-400">1:24</span>
+                        <div class="flex-1 h-1.5 bg-gray-700 rounded-full relative">
+                            <div class="absolute top-0 left-0 h-full w-1/3 bg-purple-500 rounded-full relative">
+                                <div class="absolute right-0 top-1/2 transform -translate-y-1/2 w-3 h-3 bg-white rounded-full shadow"></div>
+                            </div>
+                        </div>
+                        <span class="text-[9px] text-gray-400">3:45</span>
+                    </div>
+                    
+                    <div class="flex items-center gap-8 mt-6">
+                        <button class="touch-btn text-gray-300 text-lg"><i class="fa-solid fa-backward-step"></i></button>
+                        <button class="w-14 h-14 bg-white text-black rounded-full flex items-center justify-center touch-btn shadow-lg text-xl">
+                            <i class="fa-solid fa-play ml-1"></i>
+                        </button>
+                        <button class="touch-btn text-gray-300 text-lg"><i class="fa-solid fa-forward-step"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Aplikacja: Smart Dom -->
+            <div id="app-home" class="app-window bg-zinc-900">
+                 <div class="h-10 bg-zinc-800 flex items-center px-2 border-b border-white/10 shrink-0">
+                    <button class="w-10 h-8 flex items-center justify-center touch-btn rounded hover:bg-white/10" onclick="closeApp()">
+                        <i class="fa-solid fa-chevron-left text-green-400"></i>
+                    </button>
+                    <span class="font-semibold text-sm ml-2">Smart Dom</span>
+                </div>
+                <div class="flex-1 p-3 grid grid-cols-2 gap-3 overflow-y-auto content-start">
+                    <div class="bg-green-600/20 border border-green-500/30 rounded-xl p-3 touch-btn cursor-pointer">
+                        <i class="fa-solid fa-lightbulb text-green-400 text-2xl mb-2"></i>
+                        <h3 class="text-sm font-bold text-white">Salon</h3>
+                        <p class="text-[10px] text-green-400">100%</p>
+                    </div>
+                    <div class="bg-zinc-800 rounded-xl p-3 touch-btn cursor-pointer border border-white/5">
+                        <i class="fa-solid fa-lightbulb text-gray-400 text-2xl mb-2"></i>
+                        <h3 class="text-sm font-bold text-white">Kuchnia</h3>
+                        <p class="text-[10px] text-gray-500">Wył.</p>
+                    </div>
+                    <div class="bg-zinc-800 rounded-xl p-3 touch-btn cursor-pointer border border-white/5">
+                        <i class="fa-solid fa-temperature-half text-orange-400 text-2xl mb-2"></i>
+                        <h3 class="text-sm font-bold text-white">Term.</h3>
+                        <p class="text-[10px] text-gray-400">21.5°C</p>
+                    </div>
+                    <div class="bg-zinc-800 rounded-xl p-3 touch-btn cursor-pointer border border-white/5">
+                        <i class="fa-solid fa-lock text-red-400 text-2xl mb-2"></i>
+                        <h3 class="text-sm font-bold text-white">Drzwi</h3>
+                        <p class="text-[10px] text-red-400">Zamek</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Aplikacja: Pogoda (Dopasowana do pionu) -->
+            <div id="app-weather" class="app-window bg-gradient-to-b from-blue-500 to-blue-800">
+                <div class="h-10 flex items-center px-2 shrink-0 z-10">
+                    <button class="w-10 h-8 flex items-center justify-center touch-btn rounded hover:bg-white/10" onclick="closeApp()">
+                        <i class="fa-solid fa-chevron-left text-white"></i>
+                    </button>
+                </div>
+                <div class="flex-1 flex flex-col items-center justify-center text-white pb-10">
+                    <i class="fa-solid fa-cloud-sun text-7xl text-yellow-300 drop-shadow-lg mb-4"></i>
+                    <h1 class="text-6xl font-bold tracking-tighter">22°C</h1>
+                    <p class="text-sm font-medium opacity-80 uppercase tracking-widest mt-2">Banino, PL</p>
+                    <p class="text-xs opacity-90 mt-1">Częściowe zachmurzenie</p>
+                    
+                    <div class="w-full px-4 mt-8 grid grid-cols-3 gap-2 text-center border-t border-white/20 pt-4">
+                        <div>
+                            <p class="text-[9px] opacity-70">Wiatr</p>
+                            <p class="text-xs font-semibold">14 km/h</p>
+                        </div>
+                        <div>
+                            <p class="text-[9px] opacity-70">Wilgot.</p>
+                            <p class="text-xs font-semibold">65%</p>
+                        </div>
+                        <div>
+                            <p class="text-[9px] opacity-70">Deszcz</p>
+                            <p class="text-xs font-semibold">0 mm</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div> <!-- Koniec os-screen -->
+        
+        <!-- Fizyczny przycisk Home poniżej ekranu (na obudowie) -->
+        <div class="absolute bottom-3 left-1/2 transform -translate-x-1/2 w-10 h-2 bg-gray-700/50 rounded-full cursor-pointer hover:bg-gray-600 active:bg-gray-500" onclick="closeApp()" title="Przycisk Home"></div>
+    </div>
+
+    <script>
+        // Aktualizacja Zegara i Daty
+        function updateClock() {
+            const now = new Date();
+            
+            // Formatowanie czasu (np. 14:05)
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const timeString = `${hours}:${minutes}`;
+            
+            // Tablice z polskimi nazwami dni i miesięcy
+            const days = ['Niedziela', 'Poniedziałek', 'Wtorek', 'Środa', 'Czwartek', 'Piątek', 'Sobota'];
+            const months = ['Sty', 'Lut', 'Mar', 'Kwi', 'Maj', 'Cze', 'Lip', 'Sie', 'Wrz', 'Paź', 'Lis', 'Gru'];
+            
+            const dayName = days[now.getDay()];
+            const dayNum = now.getDate();
+            const monthName = months[now.getMonth()];
+            const dateString = `${dayName}, ${dayNum} ${monthName}`;
+            
+            // Aktualizacja w interfejsie
+            document.getElementById('clock').innerText = timeString;
+            document.getElementById('widget-time').innerText = timeString;
+            document.getElementById('widget-date').innerText = dateString;
+        }
+
+        // Uruchom zegar
+        updateClock();
+        setInterval(updateClock, 10000); // Aktualizacja co 10 sekund jest wystarczająca
+
+        // System zarządzania Oknami (Aplikacjami)
+        const homeScreen = document.getElementById('home-screen');
+        let currentApp = null;
+
+        function openApp(appId) {
+            const app = document.getElementById(appId);
+            if(app) {
+                app.classList.add('active');
+                homeScreen.style.opacity = '0.3'; // Delikatne przyciemnienie tła pod spodem
+                homeScreen.style.transform = 'scale(0.95)'; // Minimalne oddalenie ekranu domowego
+                currentApp = app;
+            }
+        }
+
+        function closeApp() {
+            if(currentApp) {
+                currentApp.classList.remove('active');
+                homeScreen.style.opacity = '1';
+                homeScreen.style.transform = 'scale(1)';
+                currentApp = null;
+            }
+        }
+    </script>
+</body>
+</html>

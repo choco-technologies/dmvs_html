@@ -976,7 +976,7 @@ static void import(conv_t* c, const char* s, const char* end, const char* base, 
         WARN(c, "cannot load the style sheet %s\n", (absolute != NULL) ? absolute : "?");
         return;
     }
-    parse_sheet(c, text, text + size, path, layer, depth + 1U);
+    parse_sheet(c, text, text + size, absolute, layer, depth + 1U);
 }
 
 /* A rule: its selectors, each a rule of the same declarations */

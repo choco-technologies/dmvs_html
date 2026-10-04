@@ -235,10 +235,20 @@ char* resource_path(conv_t* c, const char* url)
     return arena_strndup(&c->arena, path, n);
 }
 
+/* Relative to the base URL first (the maps may say where it is); when nothing
+ * maps that, relative to the file the base URL is mapped to - a style sheet
+ * that stands in for a CDN's names its files next to itself */
 char* resolve_resource(conv_t* c, const char* base, const char* url, size_t length)
 {
     char* absolute = resource_url(c, base, url, length);
-    return (absolute != NULL) ? resource_path(c, absolute) : NULL;
+    char* path = (absolute != NULL) ? resource_path(c, absolute) : NULL;
+    if (path == NULL && base != NULL && origin_length(base) > 0)
+    {
+        char* local = resource_path(c, base);
+        char* again = (local != NULL) ? resource_url(c, local, url, length) : NULL;
+        path = (again != NULL) ? resource_path(c, again) : NULL;
+    }
+    return path;
 }
 
 char* read_resource(conv_t* c, const char* path, size_t* size)
@@ -379,7 +389,7 @@ static void load_sheets(conv_t* c, node_t* n, uint32_t depth)
             size_t size = 0;
             char* text = (path != NULL) ? read_resource(c, path, &size) : NULL;
             if (text != NULL)
-                css_parse(c, text, size, path, LAYER_AUTHOR);   /* Its URLs: next to the file it is */
+                css_parse(c, text, size, url, LAYER_AUTHOR);
             else
                 WARN(c, "the style sheet %s is not read (map it to a file: -m URL=FILE)\n", (url != NULL) ? url : href);
             continue;

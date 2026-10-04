@@ -131,7 +131,9 @@ dmvsi_font_t style_font(conv_t* c, style_t* st)
     st->font = dmvsi_font(c->doc, path, (uint16_t)max32(size, 1), tracking, &status);
     if (st->font == NULL && path != NULL)
     {
-        WARN(c, "cannot read the font %s (%d) - the built-in font instead\n", path, status);
+        if (c->font_warned == NULL || strcmp(c->font_warned, path) != 0)
+            WARN(c, "cannot read the font %s (%d) - the built-in font instead\n", path, status);
+        c->font_warned = path;
         st->font = dmvsi_font(c->doc, NULL, (uint16_t)max32(size, 1), tracking, NULL);
     }
     return st->font;
