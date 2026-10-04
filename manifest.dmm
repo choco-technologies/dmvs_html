@@ -1,0 +1,5 @@
+# Include dynamically generated versions list from latest release
+$include https://github.com/choco-technologies/dmvs_html/releases/download/vlatest/versions.dmm
+
+# Module entry with version placeholder - expanded by $version-available
+dmvs_html https://github.com/choco-technologies/dmvs_html/releases/download/v<version>/dmvs_html-v<version>-<arch_name>.zip
