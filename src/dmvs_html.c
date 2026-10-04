@@ -478,6 +478,119 @@ dmod_dmvsi_dif_api_declaration(1.0, dmvs_html, bool, _probe, ( const char* path,
     return false;
 }
 
+/* ---- A page as a script changed it ---- */
+
+static node_t* element_at(node_t* n, uint32_t index, uint32_t depth)
+{
+    for (node_t* k = n->first; k != NULL && depth < 200U; k = k->next)
+    {
+        if (k->kind != NODE_ELEMENT)
+            continue;
+        if (k->index == index)
+            return k;
+        node_t* found = element_at(k, index, depth + 1U);
+        if (found != NULL)
+            return found;
+    }
+    return NULL;
+}
+
+/* "backgroundColor" -> "background-color" */
+static void kebab(const char* name, char* out, size_t size)
+{
+    size_t n = 0;
+    for (const char* s = name; *s != '\0' && n + 2U < size; s++)
+    {
+        if (*s >= 'A' && *s <= 'Z')
+        {
+            out[n++] = '-';
+            out[n++] = (char)(*s - 'A' + 'a');
+        }
+        else
+            out[n++] = *s;
+    }
+    out[n] = '\0';
+}
+
+static void apply_mod(conv_t* c, const mod_t* m)
+{
+    node_t* n = element_at(c->document, m->element, 0);
+    if (n == NULL)
+        return;
+    if (m->kind == MOD_STYLE)
+    {
+        /* As element.style.<name> = value does: the style attribute, at its end */
+        char property[64];
+        kebab(m->name, property, sizeof(property));
+        attr_t* style = NULL;
+        for (attr_t* a = n->attrs; a != NULL; a = a->next)
+        {
+            if (a->name != NULL && strcmp(a->name, "style") == 0)
+                style = a;
+        }
+        if (style == NULL)
+        {
+            style = arena_alloc(&c->arena, sizeof(*style));
+            if (style == NULL)
+                return;
+            style->name = arena_strndup(&c->arena, "style", 5);
+            style->value = arena_strndup(&c->arena, "", 0);
+            style->next = n->attrs;
+            n->attrs = style;
+        }
+        size_t length = strlen(style->value) + strlen(property) + strlen(m->value) + 4U;
+        char* value = arena_alloc(&c->arena, length);
+        if (value != NULL)
+        {
+            Dmod_SnPrintf(value, length, "%s;%s:%s", style->value, property, m->value);
+            style->value = value;
+        }
+        return;
+    }
+    /* A class added or removed */
+    uint32_t at = n->class_count;
+    for (uint32_t i = 0; i < n->class_count; i++)
+    {
+        if (strcmp(n->classes[i], m->name) == 0)
+            at = i;
+    }
+    if (m->kind == MOD_CLASS_REMOVE && at < n->class_count)
+    {
+        for (uint32_t i = at + 1U; i < n->class_count; i++)
+            n->classes[i - 1U] = n->classes[i];
+        n->class_count--;
+    }
+    else if (m->kind == MOD_CLASS_ADD && at == n->class_count)
+    {
+        char** classes = arena_alloc(&c->arena, (n->class_count + 1U) * sizeof(char*));
+        if (classes == NULL)
+            return;
+        if (n->class_count > 0)
+            memcpy(classes, n->classes, n->class_count * sizeof(char*));
+        classes[n->class_count++] = (char*)m->name;
+        n->classes = classes;
+    }
+}
+
+int run_layout(conv_t* c)
+{
+    size_t size = 0;
+    char* text = (c->path != NULL) ? read_resource(c, c->path, &size) : NULL;
+    if (text == NULL)
+        return c->arena.failed ? -ENOMEM : -ENOENT;
+    if ((c->document = html_parse(c, text, size)) == NULL)
+        return c->arena.failed ? -ENOMEM : -EBADMSG;
+    for (uint32_t i = 0; i < c->mod_count; i++)
+        apply_mod(c, &c->mods[i]);
+    load_sheets(c, c->document, 0);
+    if (c->tailwind)
+        css_parse(c, tailwind_preflight, strlen(tailwind_preflight), c->path, LAYER_TAILWIND);
+    style_compute(c, c->document);
+    if (!c->arena.failed)
+        layout_page(c, c->document);
+    return c->arena.failed ? -ENOMEM : 0;
+}
+
 dmod_dmvsi_dif_api_declaration(1.0, dmvs_html, int, _convert, ( const char* path, const dmvsi_options_t* options, dmvsi_doc_t doc ))
 {
     conv_t* c = Dmod_Malloc(sizeof(*c));
@@ -490,29 +603,16 @@ dmod_dmvsi_dif_api_declaration(1.0, dmvs_html, int, _convert, ( const char* path
     c->vh = ((options->height != 0) ? options->height : DEFAULT_HEIGHT) * U;
     c->path = arena_strndup(&c->arena, path, strlen(path));
 
-    int status = 0;
-    size_t size = 0;
-    char* text = (c->path != NULL) ? read_resource(c, c->path, &size) : NULL;
-    if (text == NULL)
-        status = c->arena.failed ? -ENOMEM : -ENOENT;
-    if (status == 0 && (c->document = html_parse(c, text, size)) == NULL)
-        status = c->arena.failed ? -ENOMEM : -EBADMSG;
+    int status = (c->path != NULL) ? run_layout(c) : -ENOMEM;
     if (status == 0)
-    {
-        load_sheets(c, c->document, 0);
-        if (c->tailwind)
-            css_parse(c, tailwind_preflight, strlen(tailwind_preflight), c->path, LAYER_TAILWIND);
-        style_compute(c, c->document);
-        if (!c->arena.failed)
-            layout_page(c, c->document);
-        if (!c->arena.failed)
-            status = paint_page(c, c->document);
-        if (c->arena.failed)
-            status = -ENOMEM;
-        const char* dump_path = Dmod_GetEnv("DMVS_HTML_DUMP");
-        if (status == 0 && dump_path != NULL && dump_path[0] != '\0')
-            dump(c, dump_path);
-    }
+        status = script_compile(c);     /* What its scripts do: variables, handlers */
+    if (status == 0)
+        status = paint_page(c, c->document);
+    if (c->arena.failed)
+        status = -ENOMEM;
+    const char* dump_path = Dmod_GetEnv("DMVS_HTML_DUMP");
+    if (status == 0 && dump_path != NULL && dump_path[0] != '\0')
+        dump(c, dump_path);
     if (c->warnings > 0)
         DMOD_LOG_INFO("dmvs_html: %s: %u warnings\n", path, (unsigned)c->warnings);
     arena_free(&c->arena);

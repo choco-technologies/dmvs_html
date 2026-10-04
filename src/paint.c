@@ -96,6 +96,57 @@ static dmvsi_rect_t border_box(const painter_t* p, const node_t* n)
     return r;
 }
 
+/* ---- What a script moves, fades, clicks ---- */
+
+void view_origin(const conv_t* c, int32_t* ox, int32_t* oy)
+{
+    *ox = *oy = 0;
+    if (c->options->root != NULL)
+    {
+        const node_t* root = find_id(c->document, c->options->root, 0);
+        if (root != NULL)
+        {
+            *ox = root->box.ax;
+            *oy = root->box.ay;
+        }
+    }
+}
+
+/* The rectangle of the group a script's element is painted in: its border box */
+dmvsi_rect_t group_rect(const conv_t* c, const node_t* n, int32_t ox, int32_t oy)
+{
+    (void)c;
+    dmvsi_rect_t r = { n->box.ax - ox, n->box.ay - oy, n->box.w, n->box.h };
+    return r;
+}
+
+/* A group for an element a script changes: bound to its variables, clicked */
+static bool begin_dynamic(painter_t* p, const node_t* n)
+{
+    if (n->dynamic == NULL || p->shadow)
+        return false;
+    dmvsi_group_t g;
+    memset(&g, 0, sizeof(g));
+    g.rect = group_rect(p->c, n, p->ox, p->oy);
+    g.opacity = 255;
+    g.name = n->id;
+    check(p, dmvsi_begin_group(p->c->doc, &g));
+    for (uint8_t b = 0; b < DMVSI_BIND_COUNT; b++)
+    {
+        if (n->dynamic->bind[b] != 0)
+            check(p, dmvsi_bind(p->c->doc, b, n->dynamic->bind[b]));
+    }
+    if (n->dynamic->click != 0)
+        check(p, dmvsi_on_click(p->c->doc, n->dynamic->click));
+    return true;
+}
+
+static void end_dynamic(painter_t* p, bool begun)
+{
+    if (begun)
+        check(p, dmvsi_end_group(p->c->doc));
+}
+
 static dmvsi_rect_t inner(const dmvsi_rect_t* r, const int32_t* b)
 {
     dmvsi_rect_t i = { r->x + b[3], r->y + b[0], max32(r->w - b[1] - b[3], 0), max32(r->h - b[0] - b[2], 0) };
@@ -268,14 +319,12 @@ static void fill(painter_t* p, dmvsi_rect_t r, int32_t radius, const dmvsi_paint
     check(p, dmvsi_add_fill(p->c->doc, &f));
 }
 
-/* Background, shadows, border of a box at r */
-static void paint_decoration(painter_t* p, const style_t* st, dmvsi_rect_t r, const int32_t* borders)
+/* Outer shadows of a box at r, the last one at the bottom */
+static void paint_outer_shadows(painter_t* p, const style_t* st, dmvsi_rect_t r)
 {
     if (st->hidden || r.w <= 0 || r.h <= 0)
         return;
     int32_t radius = radius_of(st, r.w, r.h);
-
-    /* Outer shadows, the last one at the bottom */
     for (int i = (int)st->shadow_count - 1; i >= 0 && !p->shadow; i--)
     {
         const shadow_t* sh = &st->shadows[i];
@@ -295,6 +344,16 @@ static void paint_decoration(painter_t* p, const style_t* st, dmvsi_rect_t r, co
         if (s.shape.w > 0 && s.shape.h > 0)
             check(p, dmvsi_add_shadow(p->c->doc, &s));
     }
+}
+
+/* Background, shadows (the outer ones too, unless painted already), border of a box at r */
+static void paint_box(painter_t* p, const style_t* st, dmvsi_rect_t r, const int32_t* borders, bool outer)
+{
+    if (st->hidden || r.w <= 0 || r.h <= 0)
+        return;
+    int32_t radius = radius_of(st, r.w, r.h);
+    if (outer)
+        paint_outer_shadows(p, st, r);
 
     dmvsi_paint_t paint;
     memset(&paint, 0, sizeof(paint));
@@ -369,6 +428,11 @@ static void paint_decoration(painter_t* p, const style_t* st, dmvsi_rect_t r, co
         f.paint.color = st->border_color[i];
         check(p, dmvsi_add_fill(p->c->doc, &f));
     }
+}
+
+static void paint_decoration(painter_t* p, const style_t* st, dmvsi_rect_t r, const int32_t* borders)
+{
+    paint_box(p, st, r, borders, true);
 }
 
 /* The lines of text (and inline boxes) a block holds */
@@ -528,19 +592,26 @@ static void paint_flow(painter_t* p, node_t* n, uint32_t depth)
     {
         if (!displayed(k) || is_layer(k))
             continue;
+        /* What a script clicks or moves: its group as large as it - its outer shadows beneath, outside */
+        bool outer_done = k->dynamic != NULL && !p->shadow && k->box.laid_out && !clips(k->style);
+        if (outer_done)
+            paint_outer_shadows(p, k->style, border_box(p, k));
+        bool dynamic = begin_dynamic(p, k);
         if (clips(k->style))
         {
             paint_inner(p, k, depth + 1U);
+            end_dynamic(p, dynamic);
             continue;
         }
         if (k->box.laid_out)
         {
-            paint_decoration(p, k->style, border_box(p, k), k->box.b);
+            paint_box(p, k->style, border_box(p, k), k->box.b, !outer_done);
             if (node_is(k, "img"))
                 paint_image(p, k);
             paint_lines(p, k);
         }
         paint_flow(p, k, depth + 1U);
+        end_dynamic(p, dynamic);
     }
 }
 
@@ -549,11 +620,16 @@ static void paint_context(painter_t* p, node_t* n, uint32_t depth)
     if (depth > MAX_DEPTH || !n->box.placed)
         return;
     style_t* st = n->style;
-    bool group = st->opacity < 255;
+    bool dynamic = begin_dynamic(p, n);
+    /* Its opacity: its variable's, when a script changes it */
+    bool group = st->opacity < 255 && !(dynamic && n->dynamic->bind[DMVSI_BIND_OPACITY] != 0);
     if (group)
     {
         if (st->opacity == 0)
+        {
+            end_dynamic(p, dynamic);
             return;
+        }
         dmvsi_group_t g;
         memset(&g, 0, sizeof(g));
         g.opacity = st->opacity;
@@ -575,11 +651,12 @@ static void paint_context(painter_t* p, node_t* n, uint32_t depth)
     paint_inner(p, n, depth);
     if (group)
         check(p, dmvsi_end_group(p->c->doc));
+    end_dynamic(p, dynamic);
 }
 
 /* ---- The page ---- */
 
-static node_t* find_id(node_t* n, const char* id, uint32_t depth)
+node_t* find_id(node_t* n, const char* id, uint32_t depth)
 {
     if (depth > MAX_DEPTH)
         return NULL;

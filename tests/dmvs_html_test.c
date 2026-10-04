@@ -223,3 +223,129 @@ DMOD_TEST_STEP(dmvs_html_reports_what_it_cannot_convert)
     DMOD_TEST_EXPECT_TRUE(convert(FIXTURE("dmodos.html"), "no-such-id", 0, 0, &status) == NULL);
     DMOD_TEST_EXPECT_EQ(status, -EINVAL);
 }
+
+/* The first group (in painting order) named `name` */
+static const dmvsi_node_t* group_named(const dmvsi_node_t* n, const char* name)
+{
+    for (; n != NULL; n = n->next)
+    {
+        if (n->kind != DMVSI_NODE_GROUP)
+            continue;
+        if (n->u.group.name != NULL && strcmp(n->u.group.name, name) == 0)
+            return n;
+        const dmvsi_node_t* f = group_named(n->first, name);
+        if (f != NULL)
+            return f;
+    }
+    return NULL;
+}
+
+static int32_t var_initial(dmvsi_doc_t doc, dmvsi_var_t var)
+{
+    int32_t v = -1;
+    (void)dmvsi_var_at(doc, var - 1U, NULL, &v);
+    return v;
+}
+
+DMOD_TEST_STEP(dmvs_html_converts_what_scripts_do)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("script.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { position: relative; width: 200px; height: 100px; overflow: hidden }"
+        "#home { position: absolute; inset: 0; transition: opacity 200ms linear }"
+        ".open { width: 50px; height: 20px }"
+        "#win { position: absolute; left: 0; top: 100%; width: 200px; height: 100px; background: #222;"
+        "       transition: top 0.3s ease-out } #win.active { top: 0 }"
+        "#light { width: 20px; height: 20px; background: #555 } #light.on { margin-left: 30px }"
+        "</style></head><body><div id=\"screen\">"
+        "<div id=\"home\"><div class=\"open\" onclick=\"show('win')\"></div>"
+        "<div id=\"light\" onclick=\"this.classList.toggle('on')\"></div></div>"
+        "<div id=\"win\"><div class=\"open\" onclick=\"hide()\"></div></div>"
+        "</div><script>"
+        "const home = document.getElementById('home');\n"
+        "let current = null;\n"
+        "function show(id) { const w = document.getElementById(id); w.classList.add('active');"
+        " home.style.opacity = '0.5'; current = w; }\n"
+        "function hide() { if (current) { current.classList.remove('active'); home.style.opacity = '1'; current = null; } }\n"
+        "setInterval(tick, 1000);\n"
+        "</script></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("script.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    const dmvsi_node_t* root = dmvsi_root(doc);
+
+    /* The window: its y a variable - off the screen (100 px down) until it is shown */
+    const dmvsi_node_t* win = group_named(root->first, "win");
+    DMOD_TEST_EXPECT_TRUE(win != NULL && win->bind[DMVSI_BIND_Y] != 0 && win->bind[DMVSI_BIND_X] == 0);
+    DMOD_TEST_EXPECT_TRUE(win != NULL && var_initial(doc, win->bind[DMVSI_BIND_Y]) == DMVSI_PX(100));
+    const dmvsi_node_t* home = group_named(root->first, "home");
+    DMOD_TEST_EXPECT_TRUE(home != NULL && home->bind[DMVSI_BIND_OPACITY] != 0 && var_initial(doc, home->bind[DMVSI_BIND_OPACITY]) == 255);
+
+    /* show('win'): the window up (its transition: 300 ms, ease-out), home at half, current = the window */
+    const dmvsi_node_t* open = (home != NULL) ? home->first : NULL;
+    while (open != NULL && open->click == 0)
+        open = open->next;
+    DMOD_TEST_EXPECT_TRUE(open != NULL);
+    if (open != NULL && win != NULL && home != NULL)
+    {
+        const dmvsi_action_t* a = NULL;
+        uint32_t n = dmvsi_handler_actions(doc, open->click, &a);
+        DMOD_TEST_EXPECT_EQ(n, 3u);
+        DMOD_TEST_EXPECT_TRUE(n >= 3 && a[0].kind == DMVSI_ACT_ANIMATE && a[0].var == win->bind[DMVSI_BIND_Y] && a[0].value == 0 &&
+                              a[0].duration == 300 && a[0].easing[2] == 580);
+        DMOD_TEST_EXPECT_TRUE(n >= 3 && a[1].kind == DMVSI_ACT_ANIMATE && a[1].var == home->bind[DMVSI_BIND_OPACITY] &&
+                              a[1].value == 128 && a[1].duration == 200);
+        DMOD_TEST_EXPECT_TRUE(n >= 3 && a[2].kind == DMVSI_ACT_SET && a[2].value != 0);
+    }
+
+    /* hide(): only when something is shown - IF current != 0, back, current = 0 */
+    const dmvsi_node_t* close = (win != NULL) ? win->first : NULL;
+    while (close != NULL && close->kind == DMVSI_NODE_GROUP && close->click == 0 && close->first != NULL && close->first->kind == DMVSI_NODE_GROUP)
+        close = close->first;
+    while (close != NULL && close->click == 0)
+        close = close->next;
+    DMOD_TEST_EXPECT_TRUE(close != NULL);
+    if (close != NULL)
+    {
+        const dmvsi_action_t* a = NULL;
+        uint32_t n = dmvsi_handler_actions(doc, close->click, &a);
+        DMOD_TEST_EXPECT_TRUE(n >= 6 && a[0].kind == DMVSI_ACT_IF_NE && a[0].value == 0);
+        DMOD_TEST_EXPECT_TRUE(n >= 6 && a[1].kind == DMVSI_ACT_IF_EQ);                     /* current is the window */
+        DMOD_TEST_EXPECT_TRUE(n >= 6 && a[2].kind == DMVSI_ACT_ANIMATE && a[2].value == DMVSI_PX(100));
+        DMOD_TEST_EXPECT_TRUE(n >= 6 && a[n - 1U].kind == DMVSI_ACT_END);
+    }
+
+    /* this.classList.toggle('on'): a variable of the class, the light moved by it */
+    const dmvsi_node_t* light = group_named(root->first, "light");
+    DMOD_TEST_EXPECT_TRUE(light != NULL && light->click != 0 && light->bind[DMVSI_BIND_X] != 0);
+    if (light != NULL)
+    {
+        const dmvsi_action_t* a = NULL;
+        uint32_t n = dmvsi_handler_actions(doc, light->click, &a);
+        DMOD_TEST_EXPECT_TRUE(n == 9 && a[0].kind == DMVSI_ACT_TOGGLE && a[1].kind == DMVSI_ACT_IF_NE);
+        DMOD_TEST_EXPECT_TRUE(n == 9 && a[3].kind == DMVSI_ACT_SET && a[3].value == DMVSI_PX(30));    /* no transition: at once */
+    }
+    dmvsi_free(doc);
+}
+
+DMOD_TEST_STEP(dmvs_html_switches_the_screens_of_a_page)
+{
+    int status = -1;
+    dmvsi_doc_t doc = convert(FIXTURE("dmodos.html"), "os-screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    const dmvsi_node_t* root = dmvsi_root(doc);
+    static const char windows[6][16] = { "app-settings", "app-system", "app-store", "app-music", "app-home", "app-weather" };
+    for (uint32_t i = 0; i < 6U; i++)
+    {
+        const dmvsi_node_t* w = group_named(root->first, windows[i]);
+        DMOD_TEST_EXPECT_TRUE(w != NULL && w->bind[DMVSI_BIND_Y] != 0);
+        DMOD_TEST_EXPECT_TRUE(w != NULL && var_initial(doc, w->bind[DMVSI_BIND_Y]) == DMVSI_PX(480));    /* top: 100% */
+    }
+    const dmvsi_node_t* home = group_named(root->first, "home-screen");
+    DMOD_TEST_EXPECT_TRUE(home != NULL && home->bind[DMVSI_BIND_OPACITY] != 0);
+    dmvsi_free(doc);
+}

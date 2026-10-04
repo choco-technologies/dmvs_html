@@ -69,10 +69,11 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     src/style.c
     src/layout.c
     src/paint.c
+    src/script.c
 )
 
 dmod_link_modules(${DMOD_MODULE_NAME}
-    dmvsi@>=0.1
+    dmvsi@>=0.2
 )
 
 target_include_directories(${DMOD_MODULE_NAME} PRIVATE

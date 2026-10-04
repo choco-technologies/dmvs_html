@@ -1102,6 +1102,223 @@ static int split_values(const char* v, const char** parts, size_t* lengths, int 
     return n;
 }
 
+
+/* ---- Transitions ---- */
+
+static uint8_t transition_property(const char* s, size_t n)
+{
+    static const char positions[] =
+        "|top|left|right|bottom|inset|margin|margin-top|margin-left|margin-right|margin-bottom|transform|translate|";
+    char name[32];
+    if (n == 0 || n >= sizeof(name))
+        return TRANSITION_OTHER;
+    for (size_t i = 0; i < n; i++)
+        name[i] = lower(s[i]);
+    name[n] = '\0';
+    if (strcmp(name, "all") == 0)
+        return TRANSITION_ALL;
+    if (strcmp(name, "opacity") == 0)
+        return TRANSITION_OPACITY;
+    if (strcmp(name, "none") == 0)
+        return TRANSITION_NONE;
+    for (const char* p = positions; *p != '\0'; p++)
+    {
+        if (*p == '|' && strncmp(p + 1, name, n) == 0 && p[1 + n] == '|')
+            return TRANSITION_POSITION;
+    }
+    return TRANSITION_OTHER;
+}
+
+/* "0.3s", "300ms" -> milliseconds; false when it is no time */
+static bool parse_time(const char** p, uint16_t* ms)
+{
+    const char* s = skip(*p);
+    int64_t v;
+    if (!number(&s, &v))
+        return false;
+    if (word_is(s, "ms"))
+        s += 2;
+    else if (word_is(s, "s"))
+    {
+        s += 1;
+        v *= 1000;
+    }
+    else
+        return false;
+    v /= 1000;
+    *ms = (uint16_t)((v < 0) ? 0 : (v > 60000) ? 60000 : v);
+    *p = s;
+    return true;
+}
+
+/* A timing function: its cubic-bezier, 1/1000; false when it is none */
+static bool parse_timing(const char** p, int16_t* curve)
+{
+    static const struct { char name[12]; int16_t curve[4]; } keywords[] = {
+        { "ease", { 250, 100, 250, 1000 } }, { "linear", { 0, 0, 1000, 1000 } }, { "ease-in", { 420, 0, 1000, 1000 } },
+        { "ease-out", { 0, 0, 580, 1000 } }, { "ease-in-out", { 420, 0, 580, 1000 } },
+    };
+    const char* s = skip(*p);
+    if (word_is(s, "cubic-bezier"))
+    {
+        s = skip(s + 12);
+        if (*s != '(')
+            return false;
+        s++;
+        for (int i = 0; i < 4; i++)
+        {
+            int64_t v;
+            s = skip(s);
+            if (!number(&s, &v))
+                return false;
+            curve[i] = (int16_t)((v < -2000) ? -2000 : (v > 2000) ? 2000 : v);
+            s = skip(s);
+            if (*s == ',')
+                s++;
+        }
+        s = skip(s);
+        if (*s == ')')
+            s++;
+        *p = s;
+        return true;
+    }
+    if (word_is(s, "steps") || word_is(s, "step-start") || word_is(s, "step-end"))
+    {
+        while (*s != '\0' && *s != ',' && *s != ')')
+            s++;
+        if (*s == ')')
+            s++;
+        static const int16_t linear[4] = { 0, 0, 1000, 1000 };
+        memcpy(curve, linear, sizeof(linear));
+        *p = s;
+        return true;
+    }
+    for (size_t k = 0; k < sizeof(keywords) / sizeof(keywords[0]); k++)
+    {
+        if (word_is(s, keywords[k].name))
+        {
+            memcpy(curve, keywords[k].curve, sizeof(keywords[k].curve));
+            *p = s + strlen(keywords[k].name);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* transition-property: a, b, ... */
+static void transition_properties(style_t* st, const char* v)
+{
+    const char* s = skip(v);
+    st->transition_count = 0;
+    while (*s != '\0' && st->transition_count < MAX_TRANSITIONS)
+    {
+        s = skip(s);
+        const char* start = s;
+        while (*s != '\0' && *s != ',' && !is_space(*s))
+            s++;
+        uint8_t prop = transition_property(start, (size_t)(s - start));
+        if (prop != TRANSITION_NONE)
+            st->transition_props[st->transition_count++] = prop;
+        while (*s != '\0' && *s != ',')
+            s++;
+        if (*s == ',')
+            s++;
+    }
+}
+
+static void transition_durations(style_t* st, const char* v)
+{
+    const char* s = v;
+    st->duration_count = 0;
+    while (*s != '\0' && st->duration_count < MAX_TRANSITIONS)
+    {
+        if (!parse_time(&s, &st->transition_ms[st->duration_count]))
+            break;
+        st->duration_count++;
+        s = skip(s);
+        if (*s != ',')
+            break;
+        s++;
+    }
+}
+
+static void transition_timings(style_t* st, const char* v)
+{
+    const char* s = v;
+    st->timing_count = 0;
+    while (*s != '\0' && st->timing_count < MAX_TRANSITIONS)
+    {
+        if (!parse_timing(&s, st->transition_easing[st->timing_count]))
+            break;
+        st->timing_count++;
+        s = skip(s);
+        if (*s != ',')
+            break;
+        s++;
+    }
+}
+
+/* transition: property duration [timing] [delay], ... */
+static void transition_shorthand(style_t* st, const char* v)
+{
+    static const int16_t ease[4] = { 250, 100, 250, 1000 };
+    const char* s = skip(v);
+    st->transition_count = st->duration_count = st->timing_count = 0;
+    if (word_is(s, "none"))
+        return;
+    while (*s != '\0' && st->transition_count < MAX_TRANSITIONS)
+    {
+        uint8_t prop = TRANSITION_ALL;
+        uint16_t ms = 0, delay;
+        int16_t curve[4];
+        bool has_time = false, has_timing = false;
+        memcpy(curve, ease, sizeof(curve));
+        while (*s != '\0' && *s != ',')
+        {
+            s = skip(s);
+            if (*s == '\0' || *s == ',')
+                break;
+            if (!has_time && parse_time(&s, &ms))
+                has_time = true;
+            else if (has_time && parse_time(&s, &delay))
+                continue;
+            else if (!has_timing && parse_timing(&s, curve))
+                has_timing = true;
+            else
+            {
+                const char* start = s;
+                while (*s != '\0' && *s != ',' && !is_space(*s))
+                    s++;
+                prop = transition_property(start, (size_t)(s - start));
+            }
+        }
+        uint8_t i = st->transition_count++;
+        st->transition_props[i] = prop;
+        st->transition_ms[i] = ms;
+        memcpy(st->transition_easing[i], curve, sizeof(curve));
+        st->duration_count = st->timing_count = st->transition_count;
+        if (*s == ',')
+            s++;
+    }
+}
+
+bool style_transition(const style_t* st, uint8_t what, uint16_t* ms, int16_t* easing)
+{
+    static const int16_t ease[4] = { 250, 100, 250, 1000 };
+    for (uint8_t i = 0; i < st->transition_count; i++)
+    {
+        if (st->transition_props[i] != what && st->transition_props[i] != TRANSITION_ALL)
+            continue;
+        *ms = (st->duration_count > 0) ? st->transition_ms[i % st->duration_count] : 0;
+        if (st->timing_count > 0)
+            memcpy(easing, st->transition_easing[i % st->timing_count], 4 * sizeof(int16_t));
+        else
+            memcpy(easing, ease, sizeof(ease));
+        return *ms > 0;
+    }
+    return false;
+}
+
 /* ---- Applying a declaration ---- */
 
 typedef struct
@@ -1715,6 +1932,10 @@ static void apply(apply_t* a, const char* name, const char* v)
         return;
     }
     if (strcmp(name, "content") == 0) { parse_content(a, v); return; }
+    if (strcmp(name, "transition") == 0) { transition_shorthand(st, v); return; }
+    if (strcmp(name, "transition-property") == 0) { transition_properties(st, v); return; }
+    if (strcmp(name, "transition-duration") == 0) { transition_durations(st, v); return; }
+    if (strcmp(name, "transition-timing-function") == 0) { transition_timings(st, v); return; }
 }
 
 /* ---- Custom properties ---- */
