@@ -383,6 +383,11 @@ struct style
     uint32_t    color;
     uint32_t    background;
     gradient_t* background_image;
+    const char* background_url;                     /* background-image: url() - the file (its last layer that has one) */
+    uint8_t     background_size;                    /* FIT_* (FIT_NONE: auto) */
+    int16_t     background_x, background_y;         /* background-position, % */
+    uint8_t     object_fit;                         /* FIT_* */
+    int16_t     object_x, object_y;                 /* object-position, % */
 
     const char* font_family;
     int32_t     font_size;
@@ -451,6 +456,14 @@ struct rule_ref
 #define MOD_CLASS_REMOVE    1u
 #define MOD_STYLE           2u
 #define MOD_ACTIVE          3u                      /* Pressed: it and its ancestors are :active */
+#define MOD_CLASSES         4u                      /* Classes added and removed at once: name "+a -b" */
+
+/* object-fit, background-size */
+#define FIT_FILL            0u
+#define FIT_CONTAIN         1u
+#define FIT_COVER           2u
+#define FIT_NONE            3u                      /* background-size: auto */
+#define FIT_SCALE_DOWN      4u
 
 typedef struct
 {
@@ -475,6 +488,7 @@ typedef struct
     uint32_t                order;
     font_face_t*            faces;
     bool                    tailwind;               /* The page loads Tailwind CSS (its Play CDN) */
+    const char*             tw_fonts;               /* Its tailwind.config's fontFamily: "|sans=Inter, sans-serif|" */
     bool                    has_active;             /* A rule of :active (a pressed look) */
     int32_t                 vw, vh;                 /* The viewport, 1/64 px */
     int                     status;
@@ -497,9 +511,14 @@ node_t* html_parse(conv_t* c, const char* text, size_t length);
 const char* node_attr(const node_t* n, const char* name);
 bool    node_is(const node_t* n, const char* tag);
 
+/* Inline <svg> (svg.c): its intrinsic size; its subtree written into an SVG file of the box's size (px) */
+bool    svg_size(const node_t* n, int32_t* w, int32_t* h);
+char*   svg_export(conv_t* c, const node_t* n, int32_t width, int32_t height);
+
 /* css.c */
 void    css_parse(conv_t* c, const char* text, size_t length, const char* base, uint32_t layer);
 bool    css_matches(const rule_t* rule, const node_t* n);
+uint32_t css_select(conv_t* c, const char* selector, node_t* n, node_t** out, uint32_t max);
 uint32_t css_unescape(const char** p, const char* end);
 void    css_add_rule(conv_t* c, rule_t* rule);
 uint16_t css_parse_decls(conv_t* c, const char* text, size_t length, decl_t** decls);
@@ -511,6 +530,7 @@ const rule_ref_t* css_bucket(const conv_t* c, const char* prefix, const char* na
 
 /* tailwind.c */
 extern const char tailwind_preflight[];
+void    tailwind_config(conv_t* c, const char* text, size_t length);
 uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max, uint32_t* rank, bool* active);
 
 /* style.c */

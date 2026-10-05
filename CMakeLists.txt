@@ -69,6 +69,7 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     src/style.c
     src/layout.c
     src/paint.c
+    src/svg.c
     src/script.c
 )
 

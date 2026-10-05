@@ -399,6 +399,8 @@ static void load_sheets(conv_t* c, node_t* n, uint32_t depth)
             const char* src = node_attr(k, "src");
             if (src != NULL && has_text(src, "tailwindcss"))
                 c->tailwind = true;
+            if (src == NULL && k->first != NULL && k->first->kind == NODE_TEXT)
+                tailwind_config(c, k->first->text, k->first->length);
             continue;
         }
         load_sheets(c, k, depth + 1U);
@@ -550,6 +552,26 @@ static void apply_mod(conv_t* c, const mod_t* m)
         {
             Dmod_SnPrintf(value, length, "%s;%s:%s", style->value, property, m->value);
             style->value = value;
+        }
+        return;
+    }
+    if (m->kind == MOD_CLASSES)
+    {
+        /* "+a -b": each one as its own */
+        for (const char* q = m->name; *q != '\0'; )
+        {
+            while (*q == ' ')
+                q++;
+            if (*q != '+' && *q != '-')
+                break;
+            bool add = *q++ == '+';
+            const char* e = q;
+            while (*e != '\0' && *e != ' ')
+                e++;
+            mod_t one = { m->element, add ? MOD_CLASS_ADD : MOD_CLASS_REMOVE, arena_strndup(&c->arena, q, (size_t)(e - q)), NULL };
+            if (one.name != NULL)
+                apply_mod(c, &one);
+            q = e;
         }
         return;
     }

@@ -618,6 +618,49 @@ bool css_matches(const rule_t* rule, const node_t* n)
     return rule->count > 0 && matches_from(rule, (int)rule->count - 1, n);
 }
 
+static void select_under(const rule_t* rules, uint32_t count, node_t* n, node_t** out, uint32_t max, uint32_t* found, uint32_t depth)
+{
+    for (node_t* k = n->first; k != NULL && depth < 200U; k = k->next)
+    {
+        if (k->kind != NODE_ELEMENT || k->pseudo != PSEUDO_NONE)
+            continue;
+        bool match = false;
+        for (uint32_t i = 0; i < count && !match; i++)
+            match = rules[i].pseudo_element == PSEUDO_NONE && css_matches(&rules[i], k);
+        if (match && *found < max)
+            out[(*found)++] = k;
+        select_under(rules, count, k, out, max, found, depth + 1U);
+    }
+}
+
+/* What document.querySelectorAll(selector) gives: the elements under n it matches, in the
+ * document's order - up to max of them */
+uint32_t css_select(conv_t* c, const char* selector, node_t* n, node_t** out, uint32_t max)
+{
+    rule_t rules[8];
+    uint32_t count = 0;
+    const char* end = selector + strlen(selector);
+    const char* s = selector;
+    while (s < end && count < 8U)
+    {
+        const char* e = s;
+        int depth = 0;
+        while (e < end && !(*e == ',' && depth == 0))
+        {
+            depth += (*e == '(' || *e == '[') ? 1 : (*e == ')' || *e == ']') ? -1 : 0;
+            e++;
+        }
+        memset(&rules[count], 0, sizeof(rules[count]));
+        if (parse_selector(c, s, e, &rules[count]))
+            count++;
+        s = (e < end) ? e + 1 : end;
+    }
+    uint32_t found = 0;
+    if (count > 0)
+        select_under(rules, count, n, out, max, &found, 0);
+    return found;
+}
+
 /* ---- Rules ---- */
 
 uint16_t css_parse_decls(conv_t* c, const char* text, size_t length, decl_t** decls);

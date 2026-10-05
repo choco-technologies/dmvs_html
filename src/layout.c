@@ -489,8 +489,8 @@ static frag_t* add_frag(conv_t* c, node_t* block, uint8_t kind)
 
 static bool decorated(const style_t* st)
 {
-    return (st->background >> 24) != 0 || st->background_image != NULL || st->border_w[0] > 0 || st->border_w[1] > 0 ||
-           st->border_w[2] > 0 || st->border_w[3] > 0 || st->shadow_count > 0;
+    return (st->background >> 24) != 0 || st->background_image != NULL || st->background_url != NULL ||
+           st->border_w[0] > 0 || st->border_w[1] > 0 || st->border_w[2] > 0 || st->border_w[3] > 0 || st->shadow_count > 0;
 }
 
 /* One line of items [from, to) at y: placed, returns its height */
@@ -830,9 +830,11 @@ static int32_t clamp_height(const node_t* n, int32_t h, int32_t cb_h)
     return max32(h, e);
 }
 
-/* <img>: its size from its file (or its width / height attributes) */
+/* <img>: its size from its file (or its width / height attributes); <svg>: from its attributes */
 static bool replaced_size(conv_t* c, node_t* n, int32_t* w, int32_t* h)
 {
+    if (node_is(n, "svg"))
+        return svg_size(n, w, h);
     if (!node_is(n, "img"))
         return false;
     int32_t iw = 0, ih = 0;
@@ -1598,7 +1600,32 @@ static void layout_absolute(conv_t* c, node_t* n)
         h = clamp_height(n, h, cbh);
     layout_box(c, n, w, (h != AUTO_SIZE) ? h : -1, cbw, cbh);
 
-    /* Its static position, where the flow would have put it */
+    /* Its static position, where the flow would have put it - in a flex container, as
+     * its only item, aligned by justify-content and align-self (or align-items) */
+    node_t* fc = n->box.container;
+    if (fc != NULL && fc == n->parent && fc->style != NULL &&
+        (fc->style->display == DISPLAY_FLEX || fc->style->display == DISPLAY_INLINE_FLEX))
+    {
+        const style_t* fs = fc->style;
+        bool row = fs->flex_direction == FLEX_ROW || fs->flex_direction == FLEX_ROW_REVERSE;
+        bool reverse = fs->flex_direction == FLEX_ROW_REVERSE || fs->flex_direction == FLEX_COLUMN_REVERSE;
+        int32_t free_x = fc->box.w - fc->box.b[1] - fc->box.b[3] - fc->box.p[1] - fc->box.p[3] - n->box.w - mx;
+        int32_t free_y = fc->box.h - fc->box.b[0] - fc->box.b[2] - fc->box.p[0] - fc->box.p[2] - n->box.h - my;
+        uint8_t justify = fs->justify_content;
+        uint8_t cross = (st->align_self != ALIGN_AUTO) ? st->align_self : fs->align_items;
+        int32_t main_free = row ? free_x : free_y, cross_free = row ? free_y : free_x;
+        int32_t main_off = 0, cross_off = 0;
+        if (justify == ALIGN_CENTER || justify == ALIGN_AROUND || justify == ALIGN_EVENLY)
+            main_off = main_free / 2;
+        else if ((justify == ALIGN_END) != reverse)
+            main_off = main_free;
+        if (cross == ALIGN_CENTER)
+            cross_off = cross_free / 2;
+        else if (cross == ALIGN_END)
+            cross_off = cross_free;
+        n->box.x = fc->box.b[3] + fc->box.p[3] + (row ? main_off : cross_off);
+        n->box.y = fc->box.b[0] + fc->box.p[0] + (row ? cross_off : main_off);
+    }
     int32_t sx = n->box.x, sy = n->box.y;
     if (n->box.container != NULL)
     {

@@ -209,6 +209,8 @@ static bool accept(lexer_t* l, const char* text)
 #define J_AND       14u
 #define J_OR        15u
 #define J_UNDEFINED 16u
+#define J_FUNC      17u         /* (list) => b, a; function (list) { b } */
+#define J_ADD       18u         /* a + b */
 
 #define S_EXPR      32u
 #define S_VAR       33u         /* name = a */
@@ -246,7 +248,59 @@ static js_t* node(lexer_t* l, uint8_t kind)
 }
 
 static js_t* expression(lexer_t* l);
+static js_t* assignment(lexer_t* l);
 static js_t* statement(lexer_t* l);
+static js_t* block(lexer_t* l);
+static void skip_balanced(lexer_t* l);
+
+/* (a, b = 1, c): the parameters' names into *tail - at "(" */
+static void parameters(lexer_t* l, js_t** tail)
+{
+    if (!accept(l, "("))
+        return;
+    while (!is(l, ")") && l->tok.kind != T_END)
+    {
+        if (l->tok.kind == T_IDENT && tail != NULL)
+        {
+            js_t* p = node(l, J_IDENT);
+            if (p != NULL)
+            {
+                p->name = l->tok.s;
+                p->length = l->tok.n;
+                *tail = p;
+                tail = &p->next;
+            }
+        }
+        if (is(l, "[") || is(l, "{"))
+            skip_balanced(l);           /* ({ a }) => ...: not understood, passed as it is */
+        else
+            next(l);
+        if (is(l, "="))
+        {
+            next(l);
+            (void)assignment(l);        /* A default: not understood, the argument is passed */
+        }
+        (void)accept(l, ",");
+    }
+    (void)accept(l, ")");
+}
+
+/* An arrow function's body - after "=>": a block, or an expression */
+static void arrow_body(lexer_t* l, js_t* f)
+{
+    if (is(l, "{"))
+    {
+        js_t* b = block(l);
+        if (f != NULL)
+            f->b = b;
+    }
+    else
+    {
+        js_t* e = assignment(l);
+        if (f != NULL)
+            f->a = e;
+    }
+}
 
 /* Past a balanced (...), [...] or {...} starting at the current token */
 static void skip_balanced(lexer_t* l)
@@ -298,7 +352,20 @@ static js_t* primary(lexer_t* l)
                 return n;
             }
         }
-        if (is(l, "function") || is(l, "new") || is(l, "class") || is(l, "async") || is(l, "await"))
+        if (is(l, "function"))
+        {
+            /* function (a) { ... }: a function as a value */
+            n = node(l, J_FUNC);
+            next(l);
+            if (l->tok.kind == T_IDENT)
+                next(l);
+            parameters(l, (n != NULL) ? &n->list : NULL);
+            js_t* b = block(l);
+            if (n != NULL)
+                n->b = b;
+            return n;
+        }
+        if (is(l, "new") || is(l, "class") || is(l, "async") || is(l, "await"))
         {
             /* A function expression, an object made: not understood - past it */
             n = node(l, J_UNKNOWN);
@@ -320,14 +387,16 @@ static js_t* primary(lexer_t* l)
         next(l);
         if (is(l, "=>"))
         {
-            /* x => ...: an arrow function, not understood */
+            /* x => ...: an arrow function, x its parameter */
             next(l);
-            if (is(l, "{"))
-                skip_balanced(l);
-            else
-                (void)expression(l);
-            if (n != NULL)
-                n->kind = J_UNKNOWN;
+            js_t* f = node(l, J_FUNC);
+            if (f != NULL)
+            {
+                f->list = n;
+                f->source = (n != NULL) ? n->source : f->source;
+            }
+            arrow_body(l, f);
+            return f;
         }
         return n;
     }
@@ -339,12 +408,13 @@ static js_t* primary(lexer_t* l)
         skip_balanced(l);
         if (is(l, "=>"))
         {
-            next(l);
-            if (is(l, "{"))
-                skip_balanced(l);
-            else
-                (void)expression(l);
-            return node(l, J_UNKNOWN);
+            l->p = p;
+            l->tok = t;
+            js_t* f = node(l, J_FUNC);
+            parameters(l, (f != NULL) ? &f->list : NULL);
+            (void)accept(l, "=>");
+            arrow_body(l, f);
+            return f;
         }
         l->p = p;
         l->tok = t;
@@ -383,6 +453,7 @@ static js_t* postfix(lexer_t* l)
             if (m == NULL)
                 return n;
             m->a = n;
+            m->source = (n != NULL) ? n->source : m->source;
             if (l->tok.kind == T_IDENT)
             {
                 m->name = l->tok.s;
@@ -398,10 +469,11 @@ static js_t* postfix(lexer_t* l)
             if (call == NULL)
                 return n;
             call->a = n;
+            call->source = (n != NULL) ? n->source : call->source;
             js_t** tail = &call->list;
             while (!is(l, ")") && l->tok.kind != T_END)
             {
-                js_t* arg = expression(l);
+                js_t* arg = assignment(l);
                 if (arg != NULL)
                 {
                     *tail = arg;
@@ -477,18 +549,22 @@ static js_t* binary(lexer_t* l, int level)
             kind = J_AND;
         else if (is(l, "||"))
             kind = J_OR;
+        else if (is(l, "+"))
+            kind = J_ADD;
         next(l);
         js_t* right = binary(l, level + 1);
         js_t* b = node(l, kind);
         if (b == NULL)
             return left;
         b->a = left;
+        b->source = (left != NULL) ? left->source : b->source;
         b->b = right;
         left = b;
     }
 }
 
-static js_t* expression(lexer_t* l)
+/* An expression but a list of them (a, b): an argument, a variable's value */
+static js_t* assignment(lexer_t* l)
 {
     if (++l->depth > MAX_PARSE_DEPTH)
     {
@@ -500,9 +576,9 @@ static js_t* expression(lexer_t* l)
     if (accept(l, "?"))
     {
         /* a ? b : c - not understood */
-        (void)expression(l);
+        (void)assignment(l);
         (void)accept(l, ":");
-        (void)expression(l);
+        (void)assignment(l);
         left = node(l, J_UNKNOWN);
     }
     else if (is(l, "=") || is(l, "+=") || is(l, "-=") || is(l, "*=") || is(l, "/=") || is(l, "**="))
@@ -513,13 +589,20 @@ static js_t* expression(lexer_t* l)
         if (a != NULL)
         {
             a->a = left;
-            a->b = expression(l);
+            a->source = (left != NULL) ? left->source : a->source;
+            a->b = assignment(l);
         }
         left = a;
     }
-    while (accept(l, ","))
-        (void)expression(l);         /* a, b: only the first is kept */
     l->depth--;
+    return left;
+}
+
+static js_t* expression(lexer_t* l)
+{
+    js_t* left = assignment(l);
+    while (accept(l, ","))
+        (void)assignment(l);         /* a, b: only the first is kept */
     return left;
 }
 
@@ -587,32 +670,7 @@ static js_t* statement(lexer_t* l)
             s->length = l->tok.n;
             next(l);
         }
-        if (accept(l, "("))
-        {
-            js_t** tail = (s != NULL) ? &s->list : NULL;
-            while (!is(l, ")") && l->tok.kind != T_END)
-            {
-                if (l->tok.kind == T_IDENT && tail != NULL)
-                {
-                    js_t* p = node(l, J_IDENT);
-                    if (p != NULL)
-                    {
-                        p->name = l->tok.s;
-                        p->length = l->tok.n;
-                        *tail = p;
-                        tail = &p->next;
-                    }
-                }
-                next(l);
-                if (is(l, "="))
-                {
-                    next(l);
-                    (void)expression(l);    /* A default: not understood, the argument is passed */
-                }
-                (void)accept(l, ",");
-            }
-            (void)accept(l, ")");
-        }
+        parameters(l, (s != NULL) ? &s->list : NULL);
         if (s != NULL)
             s->b = block(l);
         else
@@ -631,7 +689,7 @@ static js_t* statement(lexer_t* l)
                 v->length = l->tok.n;
                 next(l);
                 if (accept(l, "="))
-                    v->a = expression(l);
+                    v->a = assignment(l);
                 *tail = v;
                 tail = &v->next;
             }
@@ -734,6 +792,9 @@ static js_t* parse(conv_t* c, const char* text, size_t length)
 #define V_FUNCTION  9u
 #define V_CLASSES   10u         /* x.classList */
 #define V_STYLE     11u         /* x.style */
+#define V_LIST      12u         /* document.querySelectorAll(...): elements known at conversion */
+
+typedef struct binding binding_t;
 
 typedef struct
 {
@@ -742,15 +803,19 @@ typedef struct
     uint32_t        runtime;    /* V_RUNTIME (1 ...); V_CLASSES, V_STYLE of one */
     const char*     text;
     int32_t         num;
-    const js_t*     function;
+    const js_t*     function;   /* V_FUNCTION: S_FUNC or J_FUNC */
+    binding_t*      closure;    /* ... the variables it sees (J_FUNC) */
+    uint32_t        closure_count;
+    node_t**        items;      /* V_LIST */
+    uint32_t        count;
 } val_t;
 
-typedef struct
+struct binding
 {
     const char*     name;
     size_t          length;
     val_t           value;
-} binding_t;
+};
 
 /* A global variable a handler assigns: the view's variable of the element it holds */
 typedef struct
@@ -776,6 +841,8 @@ typedef struct
     uint16_t        move_ms, fade_ms;
     int16_t         move_easing[4], fade_easing[4];
     node_t*         look;               /* changed: the element as it looks then (NULL: not shown) */
+    uint32_t        look_index;         /* MOD_CLASSES: its look of the element's lookvar (0: as it is) */
+    node_t*         reveals;            /* The element as it is then, shown - hidden as the page is */
 } change_t;
 
 /* A class of an element a script asks about (contains, toggle): its variable */
@@ -785,6 +852,40 @@ typedef struct
     const char*     name;
     dmvsi_var_t     var;
 } classvar_t;
+
+/* el.addEventListener('click', f) of the page as it loads: f, run when el is clicked */
+#define MAX_LISTENERS   32u
+
+typedef struct
+{
+    node_t*         element;
+    val_t           function;
+} listener_t;
+
+/* The classes a handler changes of an element, until what it does is known (a condition, its
+ * end): one change of them all - the look they make together */
+#define MAX_PENDING     16u
+#define MAX_PENDING_OPS 12u
+
+typedef struct
+{
+    node_t*         element;
+    uint32_t        count;
+    const char*     names[MAX_PENDING_OPS];
+    bool            add[MAX_PENDING_OPS];
+} pending_t;
+
+/* An element's looks of the classes changed at once (MOD_CLASSES): 0 as it is, 1 ... */
+typedef struct
+{
+    node_t*         element;
+    dmvsi_var_t     var;
+    node_t*         looks[MAX_VARIANTS - 1U];
+    uint32_t        digests[MAX_VARIANTS - 1U];
+    uint32_t        count;
+} lookvar_t;
+
+#define MAX_LOOKVARS    16u
 
 #define PASS_DOMAINS    0u      /* What the variables may hold */
 #define PASS_CHANGES    1u      /* Which changes there are */
@@ -812,6 +913,15 @@ typedef struct
     uint32_t        inline_depth;
     bool            returned;           /* A return reached: the rest of the function is not run */
     uint32_t        conditional;        /* Inside an IF of run time */
+    val_t           result;             /* What a return gave */
+    bool            loading;            /* The page's top level: what it does as it loads */
+    listener_t      listeners[MAX_LISTENERS];
+    uint32_t        listener_count;
+    pending_t       pending[MAX_PENDING];
+    uint32_t        pending_count;
+    lookvar_t       lookvars[MAX_LOOKVARS];
+    uint32_t        lookvar_count;
+    uint32_t        click_depth;
 } script_t;
 
 static bool same_name(const char* a, size_t an, const char* b, size_t bn)
@@ -935,7 +1045,15 @@ static void apply(script_t* sc, node_t* e, uint8_t kind, const char* name, const
     change_t* ch = change(sc, e, kind, name, value);
     if (sc->pass != PASS_EMIT || ch == NULL)
         return;
-    if (kind != MOD_STYLE)
+    if (kind == MOD_CLASSES)
+    {
+        for (uint32_t i = 0; i < sc->lookvar_count; i++)
+        {
+            if (sc->lookvars[i].element == e)
+                emit(sc, DMVSI_ACT_SET, sc->lookvars[i].var, (int32_t)ch->look_index);
+        }
+    }
+    else if (kind != MOD_STYLE)
     {
         classvar_t* cv = classvar(sc, e, name, false);
         if (cv != NULL)
@@ -954,20 +1072,108 @@ static void apply(script_t* sc, node_t* e, uint8_t kind, const char* name, const
         emit_to(sc, e->dynamic->bind[DMVSI_BIND_OPACITY], ch->opacity, ch->fade_ms, ch->fade_easing);
 }
 
+/* The classes changed of each element so far, as their changes */
+static void flush(script_t* sc)
+{
+    uint32_t count = sc->pending_count;
+    sc->pending_count = 0;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        pending_t* p = &sc->pending[i];
+        if (p->count == 1)
+        {
+            apply(sc, p->element, p->add[0] ? MOD_CLASS_ADD : MOD_CLASS_REMOVE, p->names[0], NULL);
+            continue;
+        }
+        /* "+a -b ...", by the classes' names: the same changes, the same text */
+        char spec[512];
+        size_t n = 0;
+        bool used[MAX_PENDING_OPS] = { false };
+        for (uint32_t k = 0; k < p->count; k++)
+        {
+            uint32_t best = p->count;
+            for (uint32_t j = 0; j < p->count; j++)
+            {
+                if (!used[j] && (best == p->count || strcmp(p->names[j], p->names[best]) < 0))
+                    best = j;
+            }
+            used[best] = true;
+            n += (size_t)Dmod_SnPrintf(spec + n, sizeof(spec) - n, "%s%c%s", (n > 0) ? " " : "", p->add[best] ? '+' : '-', p->names[best]);
+            if (n >= sizeof(spec))
+                n = sizeof(spec) - 1U;
+        }
+        const char* name = arena_strndup(&sc->c->arena, spec, n);
+        if (name != NULL)
+            apply(sc, p->element, MOD_CLASSES, name, NULL);
+    }
+}
+
+/* A class added or removed, kept with the other classes changed of the element */
+static void class_op(script_t* sc, node_t* e, const char* name, bool add)
+{
+    pending_t* p = NULL;
+    for (uint32_t i = 0; i < sc->pending_count && p == NULL; i++)
+        p = (sc->pending[i].element == e) ? &sc->pending[i] : NULL;
+    if (p == NULL)
+    {
+        if (sc->pending_count >= MAX_PENDING)
+            flush(sc);
+        p = &sc->pending[sc->pending_count++];
+        p->element = e;
+        p->count = 0;
+    }
+    for (uint32_t i = 0; i < p->count; i++)
+    {
+        if (strcmp(p->names[i], name) == 0)
+        {
+            p->add[i] = add;            /* The last one holds */
+            return;
+        }
+    }
+    if (p->count < MAX_PENDING_OPS)
+    {
+        p->names[p->count] = name;
+        p->add[p->count++] = add;
+    }
+}
+
+/* What the handler does next depends on run time: what it changed so far first */
+static void flow(script_t* sc, uint8_t kind, dmvsi_var_t var, int32_t value)
+{
+    flush(sc);
+    if (kind == DMVSI_ACT_END)
+        emit_end(sc);
+    else
+        emit(sc, kind, var, value);
+}
+
+static void change_one(script_t* sc, node_t* e, uint8_t kind, const char* name, const char* value)
+{
+    if (kind == MOD_CLASS_ADD || kind == MOD_CLASS_REMOVE)
+        class_op(sc, e, name, kind == MOD_CLASS_ADD);
+    else
+    {
+        flush(sc);
+        apply(sc, e, kind, name, value);
+    }
+}
+
 /* A change of what a value is: one element, or each a variable may hold (at run time) */
 static void apply_to(script_t* sc, const val_t* target, uint8_t kind, const char* name, const char* value)
 {
+    if (sc->loading)
+        return;
     if (target->element != NULL)
     {
-        apply(sc, target->element, kind, name, value);
+        change_one(sc, target->element, kind, name, value);
         return;
     }
     runtime_t* rt = &sc->runtime[target->runtime - 1U];
     for (uint32_t i = 0; i < rt->domain_count; i++)
     {
-        emit(sc, DMVSI_ACT_IF_EQ, rt->var, (int32_t)rt->domain[i]->index);
-        apply(sc, rt->domain[i], kind, name, value);
-        emit_end(sc);
+        flow(sc, DMVSI_ACT_IF_EQ, rt->var, (int32_t)rt->domain[i]->index);
+        change_one(sc, rt->domain[i], kind, name, value);
+        flow(sc, DMVSI_ACT_END, 0, 0);
     }
 }
 
@@ -993,38 +1199,81 @@ static const char* text_of(script_t* sc, const val_t* v)
     return NULL;
 }
 
-/* f(args): a function of the page inlined, with its arguments' values */
-static val_t call_function(script_t* sc, const js_t* f, const js_t* args)
+/* f(args): a function of the page inlined, with its arguments' values (and, an arrow
+ * function, the variables it saw) */
+static val_t call_values(script_t* sc, const val_t* fn, const val_t* args, uint32_t count)
 {
-    if (sc->inline_depth >= MAX_INLINE)
+    const js_t* f = fn->function;
+    if (sc->inline_depth >= MAX_INLINE || f == NULL)
         return make(V_UNKNOWN);
     uint32_t saved_scope = sc->scope_count;
     bool saved_returned = sc->returned;
-    const js_t* a = args;
-    for (const js_t* p = f->list; p != NULL; p = p->next)
+    val_t saved_result = sc->result;
+    for (uint32_t i = 0; i < fn->closure_count && sc->scope_count < MAX_SCOPE; i++)
+        sc->scope[sc->scope_count++] = fn->closure[i];
+    uint32_t i = 0;
+    for (const js_t* p = f->list; p != NULL; p = p->next, i++)
     {
-        val_t v = (a != NULL) ? eval(sc, a) : make(V_UNDEFINED);
         if (sc->scope_count < MAX_SCOPE)
         {
             sc->scope[sc->scope_count].name = p->name;
             sc->scope[sc->scope_count].length = p->length;
-            sc->scope[sc->scope_count].value = v;
+            sc->scope[sc->scope_count].value = (i < count) ? args[i] : make(V_UNDEFINED);
             sc->scope_count++;
         }
-        a = (a != NULL) ? a->next : NULL;
     }
     sc->inline_depth++;
     sc->returned = false;
+    sc->result = make(V_UNDEFINED);
     uint32_t saved_conditional = sc->conditional;
     sc->conditional = 0;
-    if (f->b != NULL)
+    val_t result = make(V_UNDEFINED);
+    if (f->kind == J_FUNC && f->b == NULL)
+        result = eval(sc, f->a);        /* x => expression */
+    else if (f->b != NULL)
+    {
         run(sc, f->b);
+        result = sc->result;
+    }
     sc->conditional = saved_conditional;
     sc->inline_depth--;
     sc->returned = saved_returned;
+    sc->result = saved_result;
     sc->scope_count = saved_scope;
-    return make(V_UNDEFINED);
+    return result;
 }
+
+static val_t call_function(script_t* sc, const val_t* fn, const js_t* args)
+{
+    val_t values[8];
+    uint32_t n = 0;
+    for (const js_t* a = args; a != NULL; a = a->next)
+    {
+        val_t v = eval(sc, a);
+        if (n < 8U)
+            values[n++] = v;
+    }
+    return call_values(sc, fn, values, n);
+}
+
+/* A function as a value: an arrow function sees the variables where it is made */
+static val_t function_value(script_t* sc, const js_t* n)
+{
+    val_t v = make(V_FUNCTION);
+    v.function = n;
+    if (sc->scope_count > 0)
+    {
+        v.closure = arena_alloc(&sc->c->arena, sc->scope_count * sizeof(binding_t));
+        if (v.closure != NULL)
+        {
+            memcpy(v.closure, sc->scope, sc->scope_count * sizeof(binding_t));
+            v.closure_count = sc->scope_count;
+        }
+    }
+    return v;
+}
+
+static void run_click(script_t* sc, node_t* e);
 
 /* x.classList.add('a'), document.getElementById('a'), f(...) */
 static val_t call(script_t* sc, const js_t* n)
@@ -1034,25 +1283,100 @@ static val_t call(script_t* sc, const js_t* n)
     if (f != NULL && f->kind == J_MEMBER)
     {
         val_t object = eval(sc, f->a);
-        if (object.kind == V_DOCUMENT && (is_name(f, "getElementById") || is_name(f, "querySelector")))
+        if (object.kind == V_DOCUMENT && is_name(f, "getElementById"))
         {
             val_t id = (arg != NULL) ? eval(sc, arg) : make(V_UNKNOWN);
             if (id.kind != V_STRING)
-                return make(V_UNKNOWN);
-            const char* name = id.text;
-            if (is_name(f, "querySelector"))
             {
-                if (name[0] != '#')
-                    return make(V_UNKNOWN);
-                name++;
+                report(sc, n, "an element not known at conversion");
+                return make(V_UNKNOWN);
             }
-            node_t* e = find_id(sc->c->document, name, 0);
+            node_t* e = find_id(sc->c->document, id.text, 0);
             val_t v = make(e != NULL ? V_ELEMENT : V_NULL);
             v.element = e;
             return v;
         }
+        if ((object.kind == V_DOCUMENT || (object.kind == V_ELEMENT && object.element != NULL)) &&
+            (is_name(f, "querySelector") || is_name(f, "querySelectorAll")))
+        {
+            /* The elements of a selector: at conversion, as the page is */
+            val_t sel = (arg != NULL) ? eval(sc, arg) : make(V_UNKNOWN);
+            if (sel.kind != V_STRING)
+            {
+                report(sc, n, "a selector not known at conversion");
+                return make(V_UNKNOWN);
+            }
+            node_t* found[MAX_DOMAIN];
+            node_t* under = (object.kind == V_ELEMENT) ? object.element : sc->c->document;
+            uint32_t count = css_select(sc->c, sel.text, under, found, MAX_DOMAIN);
+            if (is_name(f, "querySelector"))
+            {
+                val_t v = make(count > 0 ? V_ELEMENT : V_NULL);
+                v.element = (count > 0) ? found[0] : NULL;
+                return v;
+            }
+            val_t v = make(V_LIST);
+            v.items = (count > 0) ? arena_alloc(&sc->c->arena, count * sizeof(node_t*)) : NULL;
+            if (v.items != NULL)
+            {
+                memcpy(v.items, found, count * sizeof(node_t*));
+                v.count = count;
+            }
+            return v;
+        }
+        if (object.kind == V_LIST && is_name(f, "forEach"))
+        {
+            /* Each element in turn - unrolled */
+            val_t fn = (arg != NULL) ? eval(sc, arg) : make(V_UNKNOWN);
+            if (fn.kind != V_FUNCTION)
+            {
+                report(sc, n, "forEach() of what is not a function");
+                return make(V_UNKNOWN);
+            }
+            for (uint32_t i = 0; i < object.count; i++)
+            {
+                val_t args[2] = { make(V_ELEMENT), make(V_NUMBER) };
+                args[0].element = object.items[i];
+                args[1].num = (int32_t)i * 1000;
+                (void)call_values(sc, &fn, args, 2);
+            }
+            return make(V_UNDEFINED);
+        }
+        if (object.kind == V_ELEMENT && object.element != NULL && is_name(f, "getAttribute"))
+        {
+            val_t name = (arg != NULL) ? eval(sc, arg) : make(V_UNKNOWN);
+            const char* value = (name.kind == V_STRING) ? node_attr(object.element, name.text) : NULL;
+            if (name.kind != V_STRING)
+                return make(V_UNKNOWN);
+            val_t v = make(value != NULL ? V_STRING : V_NULL);
+            v.text = value;
+            return v;
+        }
+        if (object.kind == V_ELEMENT && object.element != NULL && is_name(f, "addEventListener"))
+        {
+            val_t type = (arg != NULL) ? eval(sc, arg) : make(V_UNKNOWN);
+            val_t fn = (arg != NULL && arg->next != NULL) ? eval(sc, arg->next) : make(V_UNKNOWN);
+            if (!sc->loading || type.kind != V_STRING || strcmp(type.text, "click") != 0 || fn.kind != V_FUNCTION)
+            {
+                report(sc, n, sc->loading ? "a listener of what is not a click" : "a listener added by a handler");
+                return make(V_UNKNOWN);
+            }
+            if (sc->listener_count < MAX_LISTENERS)
+                sc->listeners[sc->listener_count++] = (listener_t){ object.element, fn };
+            return make(V_UNDEFINED);
+        }
+        if (object.kind == V_ELEMENT && object.element != NULL && is_name(f, "click") && !sc->loading)
+        {
+            run_click(sc, object.element);   /* What clicking it does, here */
+            return make(V_UNDEFINED);
+        }
         if (object.kind == V_CLASSES && (is_name(f, "add") || is_name(f, "remove") || is_name(f, "toggle")))
         {
+            if (sc->loading)
+            {
+                report(sc, n, "what the page does when it loads");
+                return make(V_UNKNOWN);
+            }
             for (; arg != NULL; arg = arg->next)
             {
                 val_t cls = eval(sc, arg);
@@ -1072,6 +1396,7 @@ static val_t call(script_t* sc, const js_t* n)
                     report(sc, n, "classList.toggle() of a variable");
                     continue;
                 }
+                flush(sc);
                 classvar_t* cv = classvar(sc, object.element, cls.text, true);
                 (void)change(sc, object.element, MOD_CLASS_ADD, cls.text, NULL);
                 (void)change(sc, object.element, MOD_CLASS_REMOVE, cls.text, NULL);
@@ -1095,7 +1420,15 @@ static val_t call(script_t* sc, const js_t* n)
     {
         val_t* v = lookup(sc, f->name, f->length);
         if (v != NULL && v->kind == V_FUNCTION)
-            return call_function(sc, v->function, arg);
+        {
+            if (sc->loading)
+            {
+                report(sc, n, "what the page does when it loads");
+                return make(V_UNKNOWN);
+            }
+            val_t fn = *v;
+            return call_function(sc, &fn, arg);
+        }
     }
     report(sc, n, "a call");
     return make(V_UNKNOWN);
@@ -1155,6 +1488,30 @@ static val_t eval(script_t* sc, const js_t* n)
         }
         case J_CALL:
             return call(sc, n);
+        case J_FUNC:
+            return function_value(sc, n);
+        case J_ADD:
+        {
+            val_t a = eval(sc, n->a), b = eval(sc, n->b);
+            if (a.kind == V_NUMBER && b.kind == V_NUMBER)
+            {
+                a.num += b.num;
+                return a;
+            }
+            const char* ta = text_of(sc, &a);
+            const char* tb = text_of(sc, &b);
+            if ((a.kind != V_STRING && b.kind != V_STRING) || ta == NULL || tb == NULL)
+                return make(V_UNKNOWN);
+            size_t la = strlen(ta), lb = strlen(tb);
+            char* t = arena_alloc(&sc->c->arena, la + lb + 1U);
+            if (t == NULL)
+                return make(V_UNKNOWN);
+            memcpy(t, ta, la);
+            memcpy(t + la, tb, lb);
+            val_t v = make(V_STRING);
+            v.text = t;
+            return v;
+        }
         case J_ASSIGN:
         {
             const js_t* target = n->a;
@@ -1162,6 +1519,18 @@ static val_t eval(script_t* sc, const js_t* n)
             if (target != NULL && target->kind == J_MEMBER)
             {
                 val_t object = eval(sc, target->a);
+                if (object.kind == V_ELEMENT && object.element != NULL && is_name(target, "onclick") && sc->loading &&
+                    value.kind == V_FUNCTION)
+                {
+                    if (sc->listener_count < MAX_LISTENERS)
+                        sc->listeners[sc->listener_count++] = (listener_t){ object.element, value };
+                    return value;
+                }
+                if (object.kind == V_STYLE && sc->loading)
+                {
+                    report(sc, n, "what the page does when it loads");
+                    return make(V_UNKNOWN);
+                }
                 if (object.kind == V_STYLE)
                 {
                     const char* text = text_of(sc, &value);
@@ -1181,6 +1550,11 @@ static val_t eval(script_t* sc, const js_t* n)
             if (target != NULL && target->kind == J_IDENT)
             {
                 val_t* v = lookup(sc, target->name, target->length);
+                if (v != NULL && v->kind == V_RUNTIME && sc->loading)
+                {
+                    report(sc, n, "what the page does when it loads");
+                    return make(V_UNKNOWN);
+                }
                 if (v != NULL && v->kind == V_RUNTIME)
                 {
                     runtime_t* rt = &sc->runtime[v->runtime - 1U];
@@ -1359,15 +1733,20 @@ static void run(script_t* sc, const js_t* s)
                     run(sc, s->c);
                 return;
             }
+            if (sc->loading)
+            {
+                report(sc, s, "what the page does when it loads");
+                return;
+            }
             sc->conditional++;
-            emit(sc, c.equal ? DMVSI_ACT_IF_EQ : DMVSI_ACT_IF_NE, c.var, c.value);
+            flow(sc, c.equal ? DMVSI_ACT_IF_EQ : DMVSI_ACT_IF_NE, c.var, c.value);
             run(sc, s->b);
-            emit_end(sc);
+            flow(sc, DMVSI_ACT_END, 0, 0);
             if (s->c != NULL)
             {
-                emit(sc, c.equal ? DMVSI_ACT_IF_NE : DMVSI_ACT_IF_EQ, c.var, c.value);
+                flow(sc, c.equal ? DMVSI_ACT_IF_NE : DMVSI_ACT_IF_EQ, c.var, c.value);
                 run(sc, s->c);
-                emit_end(sc);
+                flow(sc, DMVSI_ACT_END, 0, 0);
             }
             sc->conditional--;
             sc->returned = false;
@@ -1377,7 +1756,10 @@ static void run(script_t* sc, const js_t* s)
             if (sc->conditional > 0)
                 report(sc, s, "a return in a condition of run time");
             else
+            {
+                sc->result = eval(sc, s->a);
                 sc->returned = true;
+            }
             return;
         case S_FUNC:
         case S_EMPTY:
@@ -1485,6 +1867,47 @@ static void declare_globals(script_t* sc, const scripts_t* scripts)
 
 /* ---- Handlers ---- */
 
+static bool listened(const script_t* sc, const node_t* e)
+{
+    for (uint32_t i = 0; i < sc->listener_count; i++)
+    {
+        if (sc->listeners[i].element == e)
+            return true;
+    }
+    return false;
+}
+
+/* What clicking e does: its onclick, then its listeners - `this` e */
+static void run_click(script_t* sc, node_t* e)
+{
+    if (sc->click_depth >= 4U)
+        return;
+    sc->click_depth++;
+    node_t* saved_self = sc->self;
+    uint32_t saved_scope = sc->scope_count;
+    bool saved_returned = sc->returned;
+    sc->self = e;
+    const char* onclick = node_attr(e, "onclick");
+    if (onclick != NULL)
+    {
+        js_t* program = parse(sc->c, onclick, strlen(onclick));
+        sc->returned = false;
+        run_list(sc, program);
+    }
+    for (uint32_t i = 0; i < sc->listener_count; i++)
+    {
+        if (sc->listeners[i].element != e)
+            continue;
+        val_t event = make(V_UNKNOWN);
+        sc->returned = false;
+        (void)call_values(sc, &sc->listeners[i].function, &event, 1);
+    }
+    sc->self = saved_self;
+    sc->scope_count = saved_scope;
+    sc->returned = saved_returned;
+    sc->click_depth--;
+}
+
 static void handlers(script_t* sc, node_t* n, uint32_t depth)
 {
     if (depth > 200U)
@@ -1493,18 +1916,18 @@ static void handlers(script_t* sc, node_t* n, uint32_t depth)
     {
         if (k->kind != NODE_ELEMENT || k->pseudo != PSEUDO_NONE)
             continue;
-        const char* onclick = node_attr(k, "onclick");
-        if (onclick != NULL && k->style != NULL && k->style->display != DISPLAY_NONE)
+        bool clicks = node_attr(k, "onclick") != NULL || listened(sc, k);
+        if (clicks && k->style != NULL && k->style->display != DISPLAY_NONE)
         {
-            js_t* program = parse(sc->c, onclick, strlen(onclick));
             if (sc->pass == PASS_CHANGES && sc->clickable_count < MAX_MODS)
                 sc->clickables[sc->clickable_count++] = k;
-            sc->self = k;
             sc->action_count = 0;
             sc->scope_count = 0;
             sc->returned = false;
             sc->conditional = 0;
-            run_list(sc, program);
+            sc->pending_count = 0;
+            run_click(sc, k);
+            flush(sc);
             if (sc->pass == PASS_EMIT && sc->action_count > 0)
             {
                 dmvsi_handler_t h = dmvsi_add_handler(sc->c->doc, sc->actions, sc->action_count);
@@ -1660,9 +2083,61 @@ static uint32_t look_of(const node_t* e)
         for (uint32_t i = 0; i < st->background_image->count; i++)
             h = mix(h, (int32_t)st->background_image->colors[i]);
     }
+    for (const char* u = st->background_url; u != NULL && *u != '\0'; u++)
+        h = mix(h, *u);
     for (const frag_t* f = e->box.frags; f != NULL; f = f->next)
         h = mix(h, f->x + f->y * 7 + (int32_t)f->length);
     return inside(e, e, h, 0);
+}
+
+/* How opaque an element is seen: not at all while it is hidden (visibility) */
+static int32_t seen_opacity(const style_t* st)
+{
+    return st->hidden ? 0 : st->opacity;
+}
+
+/* "+a -b": whether the element has all that already */
+static bool has_classes(const node_t* e, const char* spec)
+{
+    char name[128];
+    for (const char* q = spec; *q != '\0'; )
+    {
+        while (*q == ' ')
+            q++;
+        if (*q != '+' && *q != '-')
+            break;
+        bool add = *q++ == '+';
+        size_t n = 0;
+        while (q[n] != '\0' && q[n] != ' ')
+            n++;
+        size_t k = (n < sizeof(name) - 1U) ? n : sizeof(name) - 1U;
+        memcpy(name, q, k);
+        name[k] = '\0';
+        if (has_class(e, name) != add)
+            return false;
+        q += n;
+    }
+    return true;
+}
+
+/* An element a change shows that is hidden (visibility) as the page is: shown, its opacity
+ * what hides it - so that it can fade in. Its inside hidden as it is then */
+static void reveal(node_t* e, const node_t* f, uint32_t depth)
+{
+    if (e->style != NULL && f->style != NULL && e->kind == NODE_ELEMENT && depth == 0)
+        e->style->hidden = false;
+    const node_t* g = f->first;
+    for (node_t* k = e->first; k != NULL && g != NULL && depth < 200U; k = k->next, g = g->next)
+    {
+        if (k->kind != g->kind)
+            break;
+        if (k->kind == NODE_ELEMENT && k->style != NULL && g->style != NULL)
+        {
+            if (k->style->hidden && !g->style->hidden)
+                k->style->hidden = false;
+            reveal(k, g, depth + 1U);
+        }
+    }
 }
 
 /* What a change does to its element: laid out with it, against the page as it is - a move and
@@ -1672,10 +2147,11 @@ static int lay_out_change(script_t* sc, change_t* ch)
     conv_t* c = sc->c;
     node_t* e = ch->element;
     ch->laid_out = true;
-    ch->opacity = e->style->opacity;
+    ch->opacity = seen_opacity(e->style);
     const style_t* after = e->style;           /* The style it has then: its transition */
     if ((ch->mod.kind == MOD_CLASS_ADD && has_class(e, ch->mod.name)) ||
-        (ch->mod.kind == MOD_CLASS_REMOVE && !has_class(e, ch->mod.name)))
+        (ch->mod.kind == MOD_CLASS_REMOVE && !has_class(e, ch->mod.name)) ||
+        (ch->mod.kind == MOD_CLASSES && has_classes(e, ch->mod.name)))
         ch->same = true;
     else
     {
@@ -1698,7 +2174,9 @@ static int lay_out_change(script_t* sc, change_t* ch)
             view_origin(s, &sx, &sy);
             ch->dx = (f->box.ax - sx) - (e->box.ax - ox);
             ch->dy = (f->box.ay - sy) - (e->box.ay - oy);
-            ch->opacity = f->style->opacity;
+            ch->opacity = seen_opacity(f->style);
+            if (e->style->hidden && !f->style->hidden)
+                ch->reveals = f;
             if (look_of(f) != look_of(e) || !e->box.placed)
             {
                 ch->changed = true;             /* Another look */
@@ -1776,7 +2254,7 @@ static int bind_element(script_t* sc, node_t* e)
             continue;
         moves_x = moves_x || ch->dx != 0;
         moves_y = moves_y || ch->dy != 0;
-        fades = fades || ch->opacity != e->style->opacity;
+        fades = fades || ch->opacity != seen_opacity(e->style);
     }
     if (!moves_x && !moves_y && !fades)
         return 0;
@@ -1800,7 +2278,7 @@ static int bind_element(script_t* sc, node_t* e)
     if (fades)
     {
         Dmod_SnPrintf(name, sizeof(name), "%s_alpha", base);
-        e->dynamic->bind[DMVSI_BIND_OPACITY] = dmvsi_add_var(sc->c->doc, name, e->style->opacity);
+        e->dynamic->bind[DMVSI_BIND_OPACITY] = dmvsi_add_var(sc->c->doc, name, seen_opacity(e->style));
     }
     return 0;
 }
@@ -1817,18 +2295,28 @@ int script_compile(conv_t* c)
     sc->c = c;
     declare_globals(sc, &scripts);
 
-    /* The top level: what it does when the page loads is not converted */
+    /* The top level, as the page loads: the listeners it adds - what else it does is not converted */
+    sc->pass = PASS_EMIT;
+    sc->loading = true;
     for (uint32_t p = 0; p < scripts.count; p++)
     {
         for (const js_t* s = scripts.programs[p]; s != NULL; s = s->next)
         {
-            if (s->kind == S_EXPR || s->kind == S_UNKNOWN || s->kind == S_IF)
+            if (s->kind == S_EXPR && s->a != NULL && s->a->kind == J_ASSIGN && s->a->a != NULL &&
+                s->a->a->kind == J_MEMBER && s->a->a->a != NULL && is_name(s->a->a->a, "tailwind"))
+                continue;               /* tailwind.config = ...: read with the style sheets */
+            if (s->kind == S_EXPR || s->kind == S_IF)
             {
-                sc->pass = PASS_EMIT;
-                report(sc, s, "what the page does when it loads");
+                sc->scope_count = 0;
+                run(sc, s);
             }
+            else if (s->kind == S_UNKNOWN)
+                report(sc, s, "what the page does when it loads");
         }
     }
+    sc->loading = false;
+    sc->action_count = 0;
+    sc->scope_count = 0;
 
     int status = 0;
     sc->pass = PASS_DOMAINS;
@@ -1843,12 +2331,72 @@ int script_compile(conv_t* c)
         if (e->dynamic == NULL || (e->dynamic->bind[0] == 0 && e->dynamic->bind[1] == 0 && e->dynamic->bind[2] == 0))
             status = bind_element(sc, e);
     }
+    /* What fades in from hidden: shown, at its opacity's variable */
+    for (uint32_t i = 0; i < sc->change_count && status == 0; i++)
+    {
+        change_t* ch = &sc->changes[i];
+        node_t* e = ch->element;
+        if (ch->reveals != NULL && !ch->changed && e->dynamic != NULL && e->dynamic->bind[DMVSI_BIND_OPACITY] != 0)
+            reveal(e, ch->reveals, 0);
+    }
+
+    /* The looks of classes changed at once: each element's variable, a value per look */
+    for (uint32_t i = 0; i < sc->change_count && status == 0; i++)
+    {
+        change_t* ch = &sc->changes[i];
+        if (ch->mod.kind != MOD_CLASSES || !ch->changed || ch->look == NULL)
+            continue;
+        lookvar_t* lv = NULL;
+        for (uint32_t k = 0; k < sc->lookvar_count && lv == NULL; k++)
+            lv = (sc->lookvars[k].element == ch->element) ? &sc->lookvars[k] : NULL;
+        if (lv == NULL && sc->lookvar_count < MAX_LOOKVARS)
+        {
+            lv = &sc->lookvars[sc->lookvar_count++];
+            memset(lv, 0, sizeof(*lv));
+            lv->element = ch->element;
+        }
+        if (lv == NULL)
+            continue;
+        uint32_t digest = look_of(ch->look);
+        for (uint32_t k = 0; k < lv->count && ch->look_index == 0; k++)
+            ch->look_index = (lv->digests[k] == digest) ? k + 1U : 0U;
+        if (ch->look_index == 0 && lv->count < MAX_VARIANTS - 1U)
+        {
+            lv->looks[lv->count] = ch->look;
+            lv->digests[lv->count++] = digest;
+            ch->look_index = lv->count;
+        }
+        else if (ch->look_index == 0)
+            WARN(c, "script: too many looks of #%s - not converted\n", (ch->element->id != NULL) ? ch->element->id : ch->element->tag);
+    }
+    for (uint32_t i = 0; i < sc->lookvar_count && status == 0; i++)
+    {
+        lookvar_t* lv = &sc->lookvars[i];
+        node_t* e = lv->element;
+        char name[48];
+        Dmod_SnPrintf(name, sizeof(name), "%s_look", (e->id != NULL) ? e->id : e->tag);
+        if ((lv->var = dmvsi_add_var(c->doc, name, 0)) == 0 ||
+            (e->dynamic == NULL && (e->dynamic = arena_alloc(&c->arena, sizeof(dynamic_t))) == NULL))
+        {
+            status = -ENOMEM;
+            break;
+        }
+        variant_t looks[MAX_VARIANTS];
+        uint8_t n = 0;
+        looks[n++] = (variant_t){ e->box.placed ? e : NULL, lv->var, 0, -1 };
+        for (uint32_t k = 0; k < lv->count; k++)
+            looks[n++] = (variant_t){ lv->looks[k], lv->var, (int32_t)(k + 1U), -1 };
+        memcpy(e->dynamic->variants, looks, n * sizeof(variant_t));
+        e->dynamic->variant_count = n;
+    }
 
     /* Another look of a class: the class's variable, asked by the looks */
     sc->pass = PASS_CHANGES;
     for (uint32_t i = 0; i < sc->change_count; i++)
     {
         change_t* ch = &sc->changes[i];
+        if (ch->mod.kind == MOD_CLASSES)
+            continue;
         if (ch->changed && ch->mod.kind != MOD_STYLE)
             (void)classvar(sc, ch->element, ch->mod.name, true);
         else if (ch->changed)
@@ -1878,12 +2426,13 @@ int script_compile(conv_t* c)
     for (uint32_t i = 0; i < sc->change_count && status == 0; i++)
     {
         change_t* ch = &sc->changes[i];
-        bool first = ch->changed && ch->mod.kind != MOD_STYLE;
+        bool first = ch->changed && ch->mod.kind != MOD_STYLE && ch->mod.kind != MOD_CLASSES &&
+                     (ch->element->dynamic == NULL || ch->element->dynamic->variant_count == 0);
         for (uint32_t k = 0; k < i && first; k++)
             first = !(sc->changes[k].element == ch->element && sc->changes[k].changed && sc->changes[k].mod.kind != MOD_STYLE);
         if (first)
         {
-            bool pressable = c->has_active && node_attr(ch->element, "onclick") != NULL;
+            bool pressable = c->has_active && (node_attr(ch->element, "onclick") != NULL || listened(sc, ch->element));
             status = make_variants(sc, ch->element, ch, pressable);
         }
     }

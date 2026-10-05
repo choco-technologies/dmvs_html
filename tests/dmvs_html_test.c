@@ -349,3 +349,135 @@ DMOD_TEST_STEP(dmvs_html_switches_the_screens_of_a_page)
     DMOD_TEST_EXPECT_TRUE(home != NULL && home->bind[DMVSI_BIND_OPACITY] != 0);
     dmvsi_free(doc);
 }
+
+/* The n-th image node of the tree (in painting order) */
+static const dmvsi_node_t* image_at(const dmvsi_node_t* n, uint32_t* index)
+{
+    for (; n != NULL; n = n->next)
+    {
+        if (n->kind == DMVSI_NODE_IMAGE && (*index)-- == 0)
+            return n;
+        if (n->kind == DMVSI_NODE_GROUP)
+        {
+            const dmvsi_node_t* f = image_at(n->first, index);
+            if (f != NULL)
+                return f;
+        }
+    }
+    return NULL;
+}
+
+static const dmvsi_node_t* nth_image(dmvsi_doc_t doc, uint32_t index)
+{
+    return image_at(dmvsi_root(doc), &index);
+}
+
+static bool file_has(const char* path, const char* text)
+{
+    static char data[2048];
+    void* f = Dmod_FileOpen(path, "rb");
+    if (f == NULL)
+        return false;
+    size_t n = Dmod_FileRead(data, 1, sizeof(data) - 1U, f);
+    Dmod_FileClose(f);
+    data[n] = '\0';
+    size_t k = strlen(text);
+    for (size_t i = 0; i + k <= n; i++)
+        if (strncmp(data + i, text, k) == 0)
+            return true;
+    return false;
+}
+
+DMOD_TEST_STEP(dmvs_html_draws_svg_and_images)
+{
+    /* A PNG's signature and IHDR: 100 x 50 (dmvs_html reads only the size of an image) */
+    static const uint8_t png[33] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R',
+                                     0, 0, 0, 100, 0, 0, 0, 50, 8, 6, 0, 0, 0, 0, 0, 0, 0 };
+    void* f = Dmod_FileOpen(TEST_FILE("wide.png"), "wb");
+    DMOD_TEST_EXPECT_TRUE(f != NULL);
+    if (f == NULL)
+        return;
+    Dmod_FileWrite(png, 1, sizeof(png), f);
+    Dmod_FileClose(f);
+
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("images.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { width: 200px; height: 100px }"
+        "svg { display: block; width: 40px; height: 40px }"
+        "img { display: block; width: 40px; height: 40px; object-fit: cover }"
+        "#bg { width: 40px; height: 40px; background: url('wide.png') right bottom / contain; filter: blur(4px) }"
+        "</style></head><body><div id=\"screen\">"
+        "<svg viewBox=\"0 0 10 10\"><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"red\"/></linearGradient>"
+        "<circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"currentColor\"/></svg>"
+        "<img src=\"wide.png\"><div id=\"bg\"></div>"
+        "</div></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("images.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+
+    /* The <svg>: a file of its own, sized as its box, its viewBox and camelCase names kept */
+    const dmvsi_node_t* svg = nth_image(doc, 0);
+    DMOD_TEST_EXPECT_TRUE(svg != NULL && svg->u.image.rect.w == DMVSI_PX(40) && svg->u.image.rect.h == DMVSI_PX(40));
+    if (svg != NULL)
+    {
+        size_t n = strlen(svg->u.image.path);
+        DMOD_TEST_EXPECT_TRUE(n > 4 && strcmp(svg->u.image.path + n - 4, ".svg") == 0);
+        DMOD_TEST_EXPECT_TRUE(file_has(svg->u.image.path, "width=\"40\" height=\"40\" viewBox=\"0 0 10 10\""));
+        DMOD_TEST_EXPECT_TRUE(file_has(svg->u.image.path, "<linearGradient id=\"g\">"));
+        DMOD_TEST_EXPECT_TRUE(file_has(svg->u.image.path, "fill=\"#000000\""));     /* currentColor */
+    }
+
+    /* object-fit: cover - 100 x 50 into 40 x 40: 80 x 40, in the middle */
+    const dmvsi_node_t* img = nth_image(doc, 1);
+    DMOD_TEST_EXPECT_TRUE(img != NULL && img->u.image.width == DMVSI_PX(80) && img->u.image.height == DMVSI_PX(40));
+    DMOD_TEST_EXPECT_TRUE(img != NULL && img->u.image.flags == (DMVSI_IMAGE_CENTER | DMVSI_IMAGE_MIDDLE));
+
+    /* background: url() right bottom / contain, blurred - 40 x 20 at the bottom right, blur 4 px */
+    const dmvsi_node_t* bg = nth_image(doc, 2);
+    DMOD_TEST_EXPECT_TRUE(bg != NULL && bg->u.image.width == DMVSI_PX(40) && bg->u.image.height == DMVSI_PX(20));
+    DMOD_TEST_EXPECT_TRUE(bg != NULL && bg->u.image.flags == (DMVSI_IMAGE_RIGHT | DMVSI_IMAGE_BOTTOM));
+    DMOD_TEST_EXPECT_TRUE(bg != NULL && bg->u.image.blur == DMVSI_PX(4));
+    dmvsi_free(doc);
+}
+
+DMOD_TEST_STEP(dmvs_html_converts_listeners)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("listeners.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { width: 200px; height: 100px }"
+        ".tab { width: 40px; height: 20px; background: #333 } .tab.active { background: #36f }"
+        "</style></head><body><div id=\"screen\">"
+        "<div class=\"tab active\" id=\"a\"></div><div class=\"tab\" id=\"b\"></div>"
+        "</div><script>"
+        "const tabs = document.querySelectorAll('.tab');\n"
+        "tabs.forEach(tab => {\n"
+        "  tab.addEventListener('click', () => {\n"
+        "    tabs.forEach(t => t.classList.remove('active'));\n"
+        "    tab.classList.add('active');\n"
+        "  });\n"
+        "});\n"
+        "</script></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("listeners.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    const dmvsi_node_t* root = dmvsi_root(doc);
+
+    /* forEach is unrolled: each tab is clicked with a handler of its own, and looks active by a variable */
+    const dmvsi_node_t* a = group_named(root->first, "a");
+    const dmvsi_node_t* b = group_named(root->first, "b");
+    DMOD_TEST_EXPECT_TRUE(a != NULL && b != NULL && a->click != 0 && b->click != 0 && a->click != b->click);
+    if (a != NULL && b != NULL)
+    {
+        const dmvsi_action_t* acts = NULL;
+        uint32_t n = dmvsi_handler_actions(doc, b->click, &acts);
+        bool sets = false;
+        for (uint32_t i = 0; i < n; i++)
+            sets = sets || acts[i].kind == DMVSI_ACT_SET;
+        DMOD_TEST_EXPECT_TRUE(sets);
+    }
+    dmvsi_free(doc);
+}

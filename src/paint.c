@@ -309,6 +309,48 @@ static bool gradient_paint(const gradient_t* g, int32_t w, int32_t h, dmvsi_pain
     return true;
 }
 
+/*
+ * An image file in r, sized as `fit` says - cover (and fill, its aspect kept),
+ * contain, scale-down, none (its own size) - placed at x, y (%) and clipped
+ * to r; blurred with the standard deviation `blur`
+ */
+static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit, int16_t x, int16_t y, int32_t blur)
+{
+    if (r.w <= 0 || r.h <= 0)
+        return;
+    dmvsi_image_t im;
+    memset(&im, 0, sizeof(im));
+    im.rect = r;
+    im.path = path;
+    im.blur = blur;
+    int32_t iw = 0, ih = 0;
+    if (fit != FIT_NONE && image_size(path, &iw, &ih) && iw > 0 && ih > 0)
+    {
+        bool wider = (int64_t)r.w * ih > (int64_t)r.h * iw;        /* The box is wider than the image */
+        int64_t w, h;
+        if ((fit == FIT_COVER || fit == FIT_FILL) == wider)
+        {
+            w = r.w;
+            h = (int64_t)r.w * ih / iw;
+        }
+        else
+        {
+            h = r.h;
+            w = (int64_t)r.h * iw / ih;
+        }
+        if (fit == FIT_SCALE_DOWN && w > (int64_t)iw * U)
+        {
+            w = (int64_t)iw * U;
+            h = (int64_t)ih * U;
+        }
+        im.width = (dmvsi_unit_t)w;
+        im.height = (dmvsi_unit_t)h;
+    }
+    im.flags = (uint8_t)(((x > 75) ? DMVSI_IMAGE_RIGHT : (x >= 25) ? DMVSI_IMAGE_CENTER : 0u) |
+                         ((y > 75) ? DMVSI_IMAGE_BOTTOM : (y >= 25) ? DMVSI_IMAGE_MIDDLE : 0u));
+    check(p, dmvsi_add_image(p->c->doc, &im));
+}
+
 static void fill(painter_t* p, dmvsi_rect_t r, int32_t radius, const dmvsi_paint_t* paint, const style_t* st)
 {
     if (r.w <= 0 || r.h <= 0)
@@ -384,6 +426,8 @@ static void paint_box(painter_t* p, const style_t* st, dmvsi_rect_t r, const int
         paint.color = st->background;
         fill(p, r, radius, &paint, st);
     }
+    if (st->background_url != NULL && st != p->canvas && !p->shadow)
+        image_in(p, st->background_url, r, st->background_size, st->background_x, st->background_y, st->blur);
     if (st->background_image != NULL && st != p->canvas && gradient_paint(st->background_image, r.w, r.h, &paint))
         fill(p, r, radius, &paint, st);
 
@@ -482,13 +526,27 @@ static void paint_image(painter_t* p, const node_t* n)
     char* path = (src != NULL) ? resolve_resource(p->c, p->c->path, src, strlen(src)) : NULL;
     if (path == NULL || p->shadow || n->style->hidden)
         return;
+    dmvsi_rect_t r = border_box(p, n);
+    dmvsi_rect_t b = inner(&r, n->box.b);
+    const style_t* st = n->style;
+    image_in(p, path, inner(&b, n->box.p), st->object_fit, st->object_x, st->object_y, st->blur);
+}
+
+/* An inline <svg>: its subtree as an SVG file of its content box's size */
+static void paint_svg(painter_t* p, const node_t* n)
+{
+    if (p->shadow || n->style->hidden)
+        return;
     dmvsi_image_t im;
     memset(&im, 0, sizeof(im));
     dmvsi_rect_t r = border_box(p, n);
     dmvsi_rect_t b = inner(&r, n->box.b);
     im.rect = inner(&b, n->box.p);
-    im.path = path;
-    check(p, dmvsi_add_image(p->c->doc, &im));
+    if (im.rect.w <= 0 || im.rect.h <= 0)
+        return;
+    im.path = svg_export(p->c, n, (im.rect.w + U - 1) / U, (im.rect.h + U - 1) / U);
+    if (im.path != NULL)
+        check(p, dmvsi_add_image(p->c->doc, &im));
 }
 
 /* ---- Stacking ---- */
@@ -561,6 +619,8 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
         paint_decoration(p, st, r, n->box.b);       /* The root's is the canvas's (paint_page) */
     if (node_is(n, "img"))
         paint_image(p, n);
+    else if (node_is(n, "svg"))
+        paint_svg(p, n);
 
     bool clip = clips(st);
     if (clip)
@@ -680,6 +740,8 @@ static void paint_flow_element(painter_t* p, node_t* k, uint32_t depth)
         paint_box(p, k->style, border_box(p, k), k->box.b, !outer_done);
         if (node_is(k, "img"))
             paint_image(p, k);
+        else if (node_is(k, "svg"))
+            paint_svg(p, k);
         paint_lines(p, k);
     }
     paint_flow(p, k, depth + 1U);

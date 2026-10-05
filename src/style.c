@@ -49,6 +49,7 @@ static const char g_user_agent[] =
     "text-align:center;font-size:13.333px;color:black}"
     "input,select,textarea{display:inline-block;font-size:13.333px}"
     "img,svg,video,canvas{display:inline-block}"
+    "svg *{display:none}"                                  /* Drawn as an image of the <svg> (svg.c) */
     "a{color:#0000ee}";
 
 /* ---- Lengths ---- */
@@ -1319,6 +1320,88 @@ bool style_transition(const style_t* st, uint8_t what, uint16_t* ms, int16_t* ea
     return false;
 }
 
+/* ---- Backgrounds and replaced content: url(), sizes, positions ---- */
+
+/* `what` in `s` (no strstr in a module's C library) */
+static const char* strstr_(const char* s, const char* what)
+{
+    size_t n = strlen(what);
+    for (; *s != '\0'; s++)
+        if (strncmp(s, what, n) == 0)
+            return s;
+    return NULL;
+}
+
+/* The file of the last url() of a value (a list of layers), NULL: none */
+static const char* parse_url(conv_t* c, const char* base, const char* v)
+{
+    const char* url = NULL;
+    size_t length = 0;
+    for (const char* p = v; (p = strstr_(p, "url(")) != NULL; p += 4)
+    {
+        const char* q = skip(p + 4);
+        char quote = (*q == '\'' || *q == '"') ? *q++ : '\0';
+        const char* e = q;
+        while (*e != '\0' && (quote != '\0' ? *e != quote : (*e != ')' && *e != ' ')))
+            e++;
+        url = q;
+        length = (size_t)(e - q);
+    }
+    if (url == NULL || length == 0)
+        return NULL;
+    char* path = resolve_resource(c, base, url, length);
+    if (path == NULL)
+        DMOD_LOG_WARN("dmvs_html: an image not mapped to a file - not drawn: %.*s\n", (int)((length < 120u) ? length : 120u), url);
+    return path;
+}
+
+static bool parse_fit(const char* v, uint8_t* fit)
+{
+    const char* s = skip(v);
+    if (word_is(s, "cover")) { *fit = FIT_COVER; return true; }
+    if (word_is(s, "contain")) { *fit = FIT_CONTAIN; return true; }
+    if (word_is(s, "fill")) { *fit = FIT_FILL; return true; }
+    if (word_is(s, "none") || word_is(s, "auto")) { *fit = FIT_NONE; return true; }
+    if (word_is(s, "scale-down")) { *fit = FIT_SCALE_DOWN; return true; }
+    return false;
+}
+
+/* background-position / object-position: keywords and percentages, in % */
+static void parse_position(const char* v, int16_t* x, int16_t* y)
+{
+    int16_t value[2] = { 50, 50 };
+    int axis_set[2] = { 0, 0 };
+    const char* s = skip(v);
+    for (int k = 0; k < 2 && *s != '\0' && *s != ',' && *s != '/'; k++)
+    {
+        int16_t pct = -1;
+        int axis = -1;
+        if (word_is(s, "left")) { pct = 0; axis = 0; s += 4; }
+        else if (word_is(s, "right")) { pct = 100; axis = 0; s += 5; }
+        else if (word_is(s, "top")) { pct = 0; axis = 1; s += 3; }
+        else if (word_is(s, "bottom")) { pct = 100; axis = 1; s += 6; }
+        else if (word_is(s, "center")) { pct = 50; s += 6; }
+        else if (*s >= '0' && *s <= '9')
+        {
+            int32_t n = 0;
+            while (*s >= '0' && *s <= '9')
+                n = n * 10 + (*s++ - '0');
+            while (*s != '\0' && *s != ' ' && *s != ',')
+                s++;
+            pct = (int16_t)((n > 100) ? 100 : n);
+        }
+        else
+            break;
+        if (axis < 0)
+            axis = axis_set[0] ? 1 : 0;
+        value[axis] = pct;
+        axis_set[axis] = 1;
+        s = skip(s);
+    }
+    *x = value[0];
+    *y = value[1];
+}
+
 /* ---- Applying a declaration ---- */
 
 typedef struct
@@ -1840,16 +1923,77 @@ static void apply(apply_t* a, const char* name, const char* v)
         return;
     }
     if (strcmp(name, "background-color") == 0) { const char* q = v; (void)parse_color(&q, st->color, &st->background); return; }
-    if (strcmp(name, "background-image") == 0) { st->background_image = parse_gradient(a->c, v, &a->u, st->color); return; }
+    if (strcmp(name, "background-image") == 0)
+    {
+        st->background_image = parse_gradient(a->c, v, &a->u, st->color);
+        st->background_url = parse_url(a->c, a->base, v);
+        return;
+    }
+    if (strcmp(name, "background-size") == 0) { if (!parse_fit(v, &st->background_size)) st->background_size = FIT_NONE; return; }
+    if (strcmp(name, "background-position") == 0) { parse_position(v, &st->background_x, &st->background_y); return; }
+    if (strcmp(name, "object-fit") == 0) { (void)parse_fit(v, &st->object_fit); return; }
+    if (strcmp(name, "object-position") == 0) { parse_position(v, &st->object_x, &st->object_y); return; }
     if (strcmp(name, "background") == 0)
     {
         st->background = 0;
         st->background_image = NULL;
+        st->background_url = NULL;
+        st->background_size = FIT_NONE;
+        st->background_x = st->background_y = 0;
         const char* q = s;
         if (word_is(s, "none"))
             return;
         st->background_image = parse_gradient(a->c, v, &a->u, st->color);
-        if (st->background_image != NULL)
+        st->background_url = parse_url(a->c, a->base, v);
+        const char* slash = strchr(v, '/');
+        while (slash != NULL && slash > v && slash[-1] != ' ' && slash[1] != ' ')
+            slash = strchr(slash + 1, '/');             /* "/ cover", not a URL's */
+        if (slash != NULL)
+            (void)parse_fit(slash + 1, &st->background_size);
+        if (st->background_url != NULL)
+        {
+            /* The position: its words before the size's '/', outside url() and gradients */
+            char words[64];
+            size_t k = 0;
+            int depth = 0;
+            for (const char* p = v; *p != '\0' && p != slash; p++)
+            {
+                if (*p == '(')
+                    depth++;
+                else if (*p == ')')
+                    depth--;
+                if (depth > 0 || *p == ')')
+                    continue;
+                bool start = p == v || p[-1] == ' ';
+                bool word = start && (word_is(p, "left") || word_is(p, "right") || word_is(p, "top") || word_is(p, "bottom") ||
+                            word_is(p, "center"));
+                const char* e = p;
+                if (word)
+                    while (*e >= 'a' && *e <= 'z')
+                        e++;
+                else if (start && *p >= '0' && *p <= '9')
+                {
+                    while (*e >= '0' && *e <= '9')
+                        e++;
+                    if (*e != '%')
+                        continue;
+                    e++;
+                }
+                else
+                    continue;
+                if (k + (size_t)(e - p) + 2U < sizeof(words))
+                {
+                    memcpy(words + k, p, (size_t)(e - p));
+                    k += (size_t)(e - p);
+                    words[k++] = ' ';
+                }
+                p = e - 1;
+            }
+            words[k] = '\0';
+            if (k > 0)
+                parse_position(words, &st->background_x, &st->background_y);
+        }
+        if (st->background_image != NULL || st->background_url != NULL)
             return;
         /* A color, wherever it is among the other values */
         const char* parts[6];
@@ -2202,6 +2346,9 @@ static void initial(style_t* st, const style_t* pa, int32_t vw)
     st->column_span = st->row_span = 1;
     st->opacity = 255;
     st->translate_x = st->translate_y = len_px(0);
+    st->background_size = FIT_NONE;
+    st->object_fit = FIT_FILL;
+    st->object_x = st->object_y = 50;
     if (pa != NULL)
     {
         st->color = pa->color;
@@ -2362,13 +2509,14 @@ static void add_text_child(conv_t* c, node_t* parent, const char* text, size_t l
 static void pseudo_element(conv_t* c, node_t* n, uint8_t pseudo)
 {
     style_t* st = compute(c, n, pseudo, n->style);
-    if (st == NULL || !st->has_content || st->display == DISPLAY_NONE || st->content_length == 0)
-        return;
+    if (st == NULL || !st->has_content || st->display == DISPLAY_NONE)
+        return;                         /* content: '' still makes a box - a bar, a dot */
     node_t* p = new_child(c, n, (pseudo == PSEUDO_BEFORE) ? n->first : NULL, pseudo);
     if (p == NULL)
         return;
     p->style = st;
-    add_text_child(c, p, st->content, st->content_length);
+    if (st->content_length > 0)
+        add_text_child(c, p, st->content, st->content_length);
 }
 
 static bool all_space(const node_t* t)
