@@ -18,8 +18,9 @@ it works out at conversion and makes the view's variables and handlers.
 
 **HTML** - elements, attributes, text with character references, the end
 tags a page may leave out, `<style>`, `<link rel="stylesheet">`, `style=""`,
-`<img>`, `<br>`. `<script>` is not run; one that loads Tailwind's Play CDN
-(`cdn.tailwindcss.com`) turns Tailwind on.
+`<img>`, inline `<svg>`, `<br>`. `<script>` is not run; one that loads
+Tailwind's Play CDN (`cdn.tailwindcss.com`) turns Tailwind on, and its
+`tailwind.config` (`theme.extend.fontFamily`) is read.
 
 **CSS** - the cascade (origins, `!important`, specificity, order),
 inheritance, custom properties and `var()`, `calc()` / `min()` / `max()` /
@@ -43,6 +44,17 @@ fixed, `z-index` and stacking contexts, `overflow` (clipping, scrolling),
 `linear-gradient()` and `radial-gradient()` (premultiplied as in CSS),
 `border` and `border-radius`, `opacity`, `box-shadow` (outer and inset),
 `filter: blur()` (e.g. a glow) and `drop-shadow()`, `visibility`.
+
+**Images** - `<img>` with `object-fit` (`cover`, `contain`, `fill` - its
+aspect kept -, `none`, `scale-down`) and `object-position`;
+`background-image: url()` (under its gradient layers) with
+`background-size` (`cover`, `contain`, `auto`) and `background-position`;
+`filter: blur()` blurs the image. Each size and blur an image is drawn at
+is converted once (todmvs: a section of the image's `.ini`). An inline
+`<svg>` is an image of its own: its subtree is written into an SVG file
+of its box's size - `$TMPDIR` (`/tmp`), `<page>-svg<index>.svg`, the
+`viewBox` and SVG's camelCase names kept, `currentColor` as its color -
+which dmod's dmimg_svg rasterizes.
 
 **Tailwind CSS** (v3, as its Play CDN generates it) - its preflight, the
 utilities of layout, flexbox, grid, spacing, sizing, typography,
@@ -78,6 +90,14 @@ function close() {
     }
 }
 ```
+
+Handlers are also what the page sets up when it loads:
+`addEventListener('click', ...)` and `el.onclick = ...` with arrow and
+function expressions (closures over their scope), on elements of
+`getElementById()`, `querySelector()` / `querySelectorAll()` (a list's
+`forEach()` is unrolled), `getAttribute()`; `el.click()` runs the
+element's handlers. Several class changes of an element at once are one
+look of it.
 
 `this` in an `onclick` is its element. Every change is laid out - the page
 with that class or that style:

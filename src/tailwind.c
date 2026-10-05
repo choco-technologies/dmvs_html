@@ -32,7 +32,7 @@ enum
     R_PLACE_CONTENT, R_PLACE_ITEMS, R_ALIGN_CONTENT, R_ALIGN_ITEMS, R_JUSTIFY_CONTENT, R_JUSTIFY_ITEMS, R_GAP,
     R_GAP_XY, R_PLACE_SELF, R_ALIGN_SELF, R_JUSTIFY_SELF, R_OVERFLOW, R_OVERFLOW_XY, R_TEXT_OVERFLOW, R_WHITESPACE,
     R_ROUNDED, R_ROUNDED_SIDE, R_ROUNDED_CORNER, R_BORDER_WIDTH, R_BORDER_WIDTH_XY, R_BORDER_WIDTH_SIDE,
-    R_BORDER_STYLE, R_BORDER_COLOR, R_BORDER_COLOR_XY, R_BORDER_COLOR_SIDE, R_BG_COLOR, R_BG_IMAGE, R_GRADIENT_FROM,
+    R_BORDER_STYLE, R_BORDER_COLOR, R_BORDER_COLOR_XY, R_BORDER_COLOR_SIDE, R_BG_COLOR, R_BG_IMAGE, R_BG_SIZE, R_BG_POSITION, R_OBJECT_FIT, R_OBJECT_POSITION, R_GRADIENT_FROM,
     R_GRADIENT_VIA, R_GRADIENT_TO, R_PADDING, R_PADDING_XY, R_PADDING_SIDE, R_TEXT_ALIGN, R_VERTICAL_ALIGN,
     R_FONT_FAMILY, R_FONT_SIZE, R_FONT_WEIGHT, R_TEXT_TRANSFORM, R_FONT_STYLE, R_LEADING, R_TRACKING, R_TEXT_COLOR,
     R_OPACITY, R_SHADOW, R_SHADOW_COLOR, R_BLUR, R_DROP_SHADOW, R_FILTER, R_TRANSITION, R_DURATION, R_EASE, R_ARBITRARY
@@ -1055,6 +1055,147 @@ static bool backgrounds(out_t* o, const char* u, uint32_t* rank)
     return false;
 }
 
+/* ---- The page's tailwind.config ---- */
+
+static const char* skip_js(const char* s, const char* end)
+{
+    while (s < end)
+    {
+        if (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n' || *s == ',')
+            s++;
+        else if (s + 1 < end && s[0] == '/' && s[1] == '/')
+            while (s < end && *s != '\n')
+                s++;
+        else
+            break;
+    }
+    return s;
+}
+
+/* A key ("sans", 'sans' or sans) or a string: its text at *text, its length returned, 0 if none */
+static size_t js_word(const char** s, const char* end, const char** text)
+{
+    const char* p = skip_js(*s, end);
+    size_t n = 0;
+    if (p < end && (*p == '\'' || *p == '"' || *p == '`'))
+    {
+        char q = *p++;
+        *text = p;
+        while (p + n < end && p[n] != q)
+            n++;
+        *s = (p + n < end) ? p + n + 1 : end;
+        return n;
+    }
+    *text = p;
+    while (p + n < end && ((p[n] >= 'a' && p[n] <= 'z') || (p[n] >= 'A' && p[n] <= 'Z') || (p[n] >= '0' && p[n] <= '9') || p[n] == '_' || p[n] == '-' || p[n] == '$'))
+        n++;
+    *s = p + n;
+    return n;
+}
+
+/* fontFamily: { sans: ['Inter', 'sans-serif'], ... } of the theme (or its extend): what
+ * font-sans and the others are on the page, as "|sans=Inter, sans-serif|..." */
+void tailwind_config(conv_t* c, const char* text, size_t length)
+{
+    const char* end = text + length;
+    const char* s = text;
+    while (s + 15 <= end && strncmp(s, "tailwind.config", 15) != 0)
+        s++;
+    while (s + 10 <= end && strncmp(s, "fontFamily", 10) != 0)
+        s++;
+    if (s + 10 > end)
+        return;
+    s = skip_js(s + 10, end);
+    if (s >= end || *s != ':')
+        return;
+    s = skip_js(s + 1, end);
+    if (s >= end || *s != '{')
+        return;
+    s++;
+    char all[512];
+    size_t used = 0;
+    const char* old = (c->tw_fonts != NULL) ? c->tw_fonts : "|";
+    Dmod_SnPrintf(all, sizeof(all), "%s", old);
+    used = strlen(all);
+    for (;;)
+    {
+        const char* key;
+        size_t kn = js_word(&s, end, &key);
+        s = skip_js(s, end);
+        if (kn == 0 || s >= end || *s != ':')
+            break;
+        s = skip_js(s + 1, end);
+        char value[256];
+        size_t vn = 0;
+        value[0] = '\0';
+        bool list = (s < end && *s == '[');
+        if (list)
+            s++;
+        for (;;)
+        {
+            const char* f;
+            const char* before = skip_js(s, end);
+            if (before >= end || *before == ']' || *before == '}')
+                break;
+            size_t fn = js_word(&s, end, &f);
+            if (fn == 0)
+                break;
+            bool quote = false;
+            for (size_t i = 0; i < fn; i++)
+                quote = quote || f[i] == ' ';
+            if (vn + fn + 5U < sizeof(value))
+                vn += (size_t)Dmod_SnPrintf(value + vn, sizeof(value) - vn, "%s%s", (vn > 0) ? ", " : "", quote ? "'" : "");
+            if (vn + fn + 3U < sizeof(value))
+            {
+                memcpy(value + vn, f, fn);
+                vn += fn;
+                value[vn] = '\0';
+                if (quote)
+                    value[vn++] = '\'', value[vn] = '\0';
+            }
+            if (!list)
+                break;
+        }
+        s = skip_js(s, end);
+        if (list && s < end && *s == ']')
+            s++;
+        if (vn > 0 && used + kn + vn + 3U < sizeof(all))
+        {
+            memcpy(all + used, key, kn);
+            used += kn;
+            all[used++] = '=';
+            memcpy(all + used, value, vn);
+            used += vn;
+            all[used++] = '|';
+            all[used] = '\0';
+        }
+    }
+    c->tw_fonts = arena_strndup(&c->arena, all, used);
+}
+
+/* font-<name> of the page's tailwind.config */
+static bool configured_font(out_t* o, const char* u, uint32_t* rank)
+{
+    const char* name;
+    if (o->c->tw_fonts == NULL || !starts(u, "font-", &name))
+        return false;
+    size_t n = strlen(name);
+    for (const char* s = o->c->tw_fonts; *s != '\0'; s++)
+    {
+        if (s[0] == '|' && strncmp(s + 1, name, n) == 0 && s[1 + n] == '=')
+        {
+            const char* v = s + 2 + n;
+            const char* e = strchr(v, '|');
+            char value[256];
+            cut(value, sizeof(value), v, (e != NULL) ? (size_t)(e - v) : strlen(v));
+            decl(o, "font-family", value);
+            *rank = R_FONT_FAMILY;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool keywords(out_t* o, const char* u, uint32_t* rank)
 {
     static const struct { char name[20]; char decls[56]; uint32_t rank; } table[] = {
@@ -1085,6 +1226,17 @@ static bool keywords(out_t* o, const char* u, uint32_t* rank)
         { "align-text-top", "vertical-align:text-top", R_VERTICAL_ALIGN },
         { "align-text-bottom", "vertical-align:text-bottom", R_VERTICAL_ALIGN },
         { "z-auto", "z-index:auto", R_Z },
+        { "bg-cover", "background-size:cover", R_BG_SIZE }, { "bg-contain", "background-size:contain", R_BG_SIZE },
+        { "bg-auto", "background-size:auto", R_BG_SIZE },
+        { "bg-center", "background-position:center", R_BG_POSITION }, { "bg-top", "background-position:top", R_BG_POSITION },
+        { "bg-bottom", "background-position:bottom", R_BG_POSITION }, { "bg-left", "background-position:left", R_BG_POSITION },
+        { "bg-right", "background-position:right", R_BG_POSITION },
+        { "object-cover", "object-fit:cover", R_OBJECT_FIT }, { "object-contain", "object-fit:contain", R_OBJECT_FIT },
+        { "object-fill", "object-fit:fill", R_OBJECT_FIT }, { "object-none", "object-fit:none", R_OBJECT_FIT },
+        { "object-scale-down", "object-fit:scale-down", R_OBJECT_FIT },
+        { "object-center", "object-position:center", R_OBJECT_POSITION }, { "object-top", "object-position:top", R_OBJECT_POSITION },
+        { "object-bottom", "object-position:bottom", R_OBJECT_POSITION }, { "object-left", "object-position:left", R_OBJECT_POSITION },
+        { "object-right", "object-position:right", R_OBJECT_POSITION },
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
     {
@@ -1301,7 +1453,7 @@ uint32_t tailwind_class(conv_t* c, const char* name, decl_t* decls, uint32_t max
     }
 
     uint32_t r = 0;
-    bool ok = keywords(&o, u, &r) || box_sides(&o, u, 'm', "margin", negative, R_MARGIN, &r) ||
+    bool ok = configured_font(&o, u, &r) || keywords(&o, u, &r) || box_sides(&o, u, 'm', "margin", negative, R_MARGIN, &r) ||
               box_sides(&o, u, 'p', "padding", false, R_PADDING, &r) || sizes(&o, u, negative, &r) ||
               inset(&o, u, negative, &r) || texts(&o, u, &r) || backgrounds(&o, u, &r) || borders(&o, u, &r) ||
               rounded(&o, u, &r) || flexbox(&o, u, &r) || grids(&o, u, &r) || effects(&o, u, negative, &r) ||
