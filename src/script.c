@@ -447,6 +447,8 @@ static dynamic_t* text_of(script_t* sc, node_t* e)
 
 static void set_text(script_t* sc, node_t* e, const dmvs_js_value_t* v)
 {
+    if (v->kind == DMVS_JS_V_UNDEFINED)
+        return;                             /* What was not converted (reported): the text stays */
     dynamic_t* d = text_of(sc, e);
     if (d == NULL || d->text == 0)
         return;

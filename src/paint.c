@@ -535,6 +535,39 @@ static void paint_text_var(painter_t* p, const node_t* block, const node_t* e, c
         t.x = e->box.ax - p->ox + p->dx + e->box.b[3] + e->box.p[3];
         t.width = e->box.w - e->box.b[1] - e->box.b[3] - e->box.p[1] - e->box.p[3];
         t.align = (st->text_align == TEXT_CENTER) ? DMVSI_TEXT_CENTER : (st->text_align == TEXT_RIGHT) ? DMVSI_TEXT_RIGHT : DMVSI_TEXT_LEFT;
+        /*
+         * A box as wide as its text (a flex item, a float): the text it gets may be
+         * longer - room in its parent's content box, placed as the box is in it
+         * (in its middle: centred; at its right: right-aligned; else from where it is)
+         */
+        /* (its parent as narrow too - a column of such items: the first that is wider) */
+        const node_t* q = e->parent;
+        int32_t qx = 0, qw = 0;
+        for (uint32_t up = 0; q != NULL && q->kind == NODE_ELEMENT && q->box.laid_out && up < 4u; q = q->parent, up++)
+        {
+            qx = q->box.ax - p->ox + p->dx + q->box.b[3] + q->box.p[3];
+            qw = q->box.w - q->box.b[1] - q->box.b[3] - q->box.p[1] - q->box.p[3];
+            if (qw > t.width + 2 * DMVSI_UNIT)
+                break;
+        }
+        if (q != NULL && q->kind == NODE_ELEMENT && q->box.laid_out && t.align == DMVSI_TEXT_LEFT)
+        {
+            int32_t mid = t.x + t.width / 2, qmid = qx + qw / 2;
+            if (qw > t.width)
+            {
+                if (mid - qmid <= DMVSI_UNIT && qmid - mid <= DMVSI_UNIT)
+                {
+                    t.x = qx;
+                    t.align = DMVSI_TEXT_CENTER;
+                }
+                else if ((qx + qw) - (t.x + t.width) <= DMVSI_UNIT)
+                {
+                    t.x = qx;
+                    t.align = DMVSI_TEXT_RIGHT;
+                }
+                t.width = (t.align == DMVSI_TEXT_LEFT) ? qx + qw - t.x : qw;
+            }
+        }
     }
     else
         t.x = block->box.ax - p->ox + p->dx + ((f != NULL) ? f->x : 0);
