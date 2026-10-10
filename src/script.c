@@ -135,6 +135,17 @@ typedef struct
 
 #define MAX_LOOKVARS    16u
 
+/* An image whose src a script sets to one of known ones (dmvs_js_choices()): a variant of each, its variable which */
+#define MAX_SRCVARS     8u
+
+typedef struct
+{
+    node_t*         element;
+    dmvsi_var_t     var;
+    const char*     picks[MAX_VARIANTS];
+    uint32_t        count;
+} srcvar_t;
+
 typedef struct
 {
     conv_t*             c;
@@ -162,6 +173,8 @@ typedef struct
     uint32_t            wide_count;
     const char*         chars;
     uint32_t            made;                   /* document.createElement() so far: the k-th is the build's */
+    srcvar_t            srcvars[MAX_SRCVARS];
+    uint32_t            srcvar_count;
 } script_t;
 
 static void report(script_t* sc, const char* what)
@@ -645,6 +658,182 @@ static int host_get(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* obj
     return -ENOTSUP;
 }
 
+/* A class list's change from what the element has: "+a -b" (by name, as flush_pending() writes it) */
+static const char* class_diff(script_t* sc, const node_t* e, const char* list)
+{
+    const char* names[2 * MAX_PENDING_OPS];
+    bool add[2 * MAX_PENDING_OPS];
+    uint32_t n = 0;
+    char word[128];
+    /* Added: what the list has, the element not */
+    for (const char* q = list; *q != '\0' && n < MAX_PENDING_OPS; )
+    {
+        while (*q == ' ' || *q == '\t' || *q == '\n')
+            q++;
+        size_t k = 0;
+        while (q[k] != '\0' && q[k] != ' ' && q[k] != '\t' && q[k] != '\n')
+            k++;
+        if (k == 0)
+            break;
+        size_t m = (k < sizeof(word) - 1U) ? k : sizeof(word) - 1U;
+        memcpy(word, q, m);
+        word[m] = '\0';
+        q += k;
+        if (!has_class(e, word))
+        {
+            names[n] = arena_strndup(&sc->c->arena, word, m);
+            add[n++] = true;
+        }
+    }
+    /* Removed: what the element has, the list not */
+    for (uint32_t i = 0; i < e->class_count && n < 2U * MAX_PENDING_OPS; i++)
+    {
+        const char* cls = e->classes[i];
+        size_t m = strlen(cls);
+        bool kept = false;
+        for (const char* q = list; *q != '\0' && !kept; )
+        {
+            while (*q == ' ' || *q == '\t' || *q == '\n')
+                q++;
+            size_t k = 0;
+            while (q[k] != '\0' && q[k] != ' ' && q[k] != '\t' && q[k] != '\n')
+                k++;
+            kept = k == m && memcmp(q, cls, m) == 0;
+            q += k;
+        }
+        if (!kept)
+        {
+            names[n] = cls;
+            add[n++] = false;
+        }
+    }
+    char spec[512];
+    size_t len = 0;
+    bool used[2 * MAX_PENDING_OPS] = { false };
+    spec[0] = '\0';
+    for (uint32_t k = 0; k < n; k++)
+    {
+        uint32_t best = n;
+        for (uint32_t j = 0; j < n; j++)
+            if (!used[j] && names[j] != NULL && (best == n || strcmp(names[j], names[best]) < 0))
+                best = j;
+        if (best == n)
+            break;
+        used[best] = true;
+        len += (size_t)Dmod_SnPrintf(spec + len, sizeof(spec) - len, "%s%c%s", (len > 0) ? " " : "", add[best] ? '+' : '-', names[best]);
+        if (len >= sizeof(spec))
+            len = sizeof(spec) - 1U;
+    }
+    return arena_strndup(&sc->c->arena, spec, len);
+}
+
+/* el.className = one of known lists: the change to each, on which it is */
+static int set_class_name(script_t* sc, node_t* e, const dmvs_js_value_t* value)
+{
+    const dmvs_js_value_t* picks = NULL;
+    dmvsi_var_t index = 0;
+    uint32_t n = dmvs_js_choices(sc->js, value, &picks, &index);
+    const char* text = static_text(sc, value);
+    if (text != NULL)
+    {
+        const char* spec = class_diff(sc, e, text);
+        if (spec != NULL)
+            place(sc, e, MOD_CLASSES, spec, NULL);
+        return 0;
+    }
+    if (n == 0 || n > MAX_VARIANTS)
+        return is_built(e) ? 0 : -ENOTSUP;      /* (what the build made it: as it is) */
+    for (uint32_t i = 0; i < n; i++)
+    {
+        if (picks[i].kind != DMVS_JS_V_STRING)
+            return -ENOTSUP;
+    }
+    for (uint32_t i = 0; i < n; i++)
+    {
+        const char* spec = class_diff(sc, e, picks[i].text);
+        if (spec == NULL)
+            return -ENOMEM;
+        emit_op(sc, DMVSI_ACT_IF_EQ, index, 0, (int32_t)i, NULL);
+        place(sc, e, MOD_CLASSES, spec, NULL);
+        emit_op(sc, DMVSI_ACT_END, 0, 0, 0, NULL);
+    }
+    return 0;
+}
+
+/* img.src = one of known images: a variant of each (made at the end), its variable set to which */
+static int set_src(script_t* sc, node_t* e, const dmvs_js_value_t* value)
+{
+    const dmvs_js_value_t* picks = NULL;
+    dmvsi_var_t index = 0;
+    uint32_t n = dmvs_js_choices(sc->js, value, &picks, &index);
+    if (!node_is(e, "img") || n < 2 || n > MAX_VARIANTS)
+        return -ENOTSUP;
+    srcvar_t* sv = NULL;
+    for (uint32_t i = 0; i < sc->srcvar_count && sv == NULL; i++)
+        sv = (sc->srcvars[i].element == e) ? &sc->srcvars[i] : NULL;
+    if (sv == NULL)
+    {
+        if (sc->srcvar_count >= MAX_SRCVARS)
+            return -ENOTSUP;
+        sv = &sc->srcvars[sc->srcvar_count];
+        memset(sv, 0, sizeof(*sv));
+        const char* now = node_attr(e, "src");
+        int32_t initial = 0;
+        for (uint32_t i = 0; i < n; i++)
+        {
+            if (picks[i].kind != DMVS_JS_V_STRING)
+                return -ENOTSUP;
+            sv->picks[i] = arena_strndup(&sc->c->arena, picks[i].text, picks[i].length);
+            if (now != NULL && strcmp(now, picks[i].text) == 0)
+                initial = (int32_t)i;
+        }
+        char label[48];
+        Dmod_SnPrintf(label, sizeof(label), "%s_src", label_of(e));
+        if ((sv->var = dmvsi_add_var(sc->c->doc, label, initial)) == 0)
+            return -ENOMEM;
+        sv->element = e;
+        sv->count = n;
+        sc->srcvar_count++;
+    }
+    else if (sv->count != n)
+        return -ENOTSUP;                        /* Of other images elsewhere */
+    emit_op(sc, DMVSI_ACT_SET, sv->var, index, 0, NULL);
+    return 0;
+}
+
+/* The images' variants: the element as it is, its src another */
+static int make_src_variants(script_t* sc)
+{
+    for (uint32_t i = 0; i < sc->srcvar_count; i++)
+    {
+        srcvar_t* sv = &sc->srcvars[i];
+        node_t* e = sv->element;
+        dynamic_t* d = dynamic_of(sc, e);
+        if (d == NULL)
+            return -ENOMEM;
+        if (d->variant_count > 0 || !e->box.placed)
+        {
+            WARN(sc->c, "script: the images of #%s as well as its looks - not converted\n", label_of(e));
+            continue;
+        }
+        for (uint32_t k = 0; k < sv->count; k++)
+        {
+            node_t* look = arena_alloc(&sc->c->arena, sizeof(node_t));
+            attr_t* src = arena_alloc(&sc->c->arena, sizeof(attr_t));
+            if (look == NULL || src == NULL)
+                return -ENOMEM;
+            *look = *e;
+            look->dynamic = NULL;
+            src->name = (char*)"src";
+            src->value = (char*)sv->picks[k];
+            src->next = e->attrs;                /* (before the element's own: node_attr() finds it first) */
+            look->attrs = src;
+            d->variants[d->variant_count++] = (variant_t){ look, sv->var, (int32_t)k, -1 };
+        }
+    }
+    return 0;
+}
+
 static int host_set(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* object, const char* name, const dmvs_js_value_t* value)
 {
     script_t* sc = ctx;
@@ -674,7 +863,11 @@ static int host_set(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* obj
     }
     if (kind != H_ELEMENT || e == NULL)
         return -ENOTSUP;
-    if (is_built(e) && (strcmp(name, "className") == 0 || strcmp(name, "innerHTML") == 0 || strcmp(name, "id") == 0))
+    if (strcmp(name, "className") == 0)
+        return set_class_name(sc, e, value);
+    if (strcmp(name, "src") == 0)
+        return set_src(sc, e, value);
+    if (is_built(e) && (strcmp(name, "innerHTML") == 0 || strcmp(name, "id") == 0))
         return 0;                           /* As the build made it */
     if (holds_built(e) && strcmp(name, "innerHTML") == 0)
         return 0;                           /* Emptied to be built anew: as the build left it */
@@ -896,7 +1089,11 @@ static uint32_t inside(const node_t* e, const node_t* n, uint32_t h, uint32_t de
         for (int i = 0; i < 6; i++)
             h = (h ^ (uint32_t)v[i]) * 16777619u;
         for (const frag_t* f = k->box.frags; f != NULL; f = f->next)
+        {
             h = (h ^ (uint32_t)(f->x + f->y * 7 + (int32_t)f->length)) * 16777619u;
+            for (size_t i = 0; f->text != NULL && i < f->length; i++)
+                h = (h ^ (uint8_t)f->text[i]) * 16777619u;      /* Another text, another icon (::before) */
+        }
         h = inside(e, k, h, depth + 1U);
     }
     return h;
@@ -1023,7 +1220,11 @@ static uint32_t look_of(const node_t* e)
     for (const char* u = st->background_url; u != NULL && *u != '\0'; u++)
         h = mix(h, *u);
     for (const frag_t* f = e->box.frags; f != NULL; f = f->next)
+    {
         h = mix(h, f->x + f->y * 7 + (int32_t)f->length);
+        for (size_t i = 0; f->text != NULL && i < f->length; i++)
+            h = mix(h, (uint8_t)f->text[i]);
+    }
     return inside(e, e, h, 0);
 }
 
@@ -1652,6 +1853,8 @@ int script_compile(conv_t* c)
         status = expand_held(sc);
     if (status == 0)
         status = lay_out_changes(sc);
+    if (status == 0)
+        status = make_src_variants(sc);
     if (status == 0)
         status = make_handlers(sc);
     texts(sc, c->document, 0);

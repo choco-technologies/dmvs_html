@@ -104,7 +104,7 @@ typedef struct
 } box_t;
 
 /* One look of an element: the element as laid out in a state of the page, shown on its conditions */
-#define MAX_VARIANTS        4u
+#define MAX_VARIANTS        8u
 
 typedef struct
 {

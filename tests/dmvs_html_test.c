@@ -639,7 +639,7 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
         "    const div = document.createElement('div');\n"
         "    div.className = `row ${i === current ? 'on' : ''}`;\n"
         "    div.innerHTML = `<span>${song.t}</span> <b>${time(song.s)}</b>`;\n"
-        "    div.onclick = () => { current = i; document.getElementById('title').innerText = song.t; };\n"
+        "    div.onclick = () => { current = i; document.getElementById('title').innerText = song.t; render(); };\n"
         "    list.appendChild(div);\n"
         "  });\n"
         "}\n"
@@ -661,5 +661,8 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
     dmvsi_var_t title = var_named(doc, "title_text");
     uint32_t clicked = clicks_setting(doc, root->first, title);
     DMOD_TEST_EXPECT_EQ(clicked, 3u);
+    /* Rendered anew on a click: each row's class list one of two - its look's variable set */
+    dmvsi_var_t look = var_named(doc, "div_look");
+    DMOD_TEST_EXPECT_TRUE(look != 0 && clicks_setting(doc, root->first, look) == 3u);
     dmvsi_free(doc);
 }
