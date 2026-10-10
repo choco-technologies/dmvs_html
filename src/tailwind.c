@@ -186,7 +186,12 @@ const char tailwind_preflight[] =
     "dialog{padding:0}"
     "audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}"
     "img,video{max-width:100%;height:auto}"
-    "[hidden]{display:none}";
+    "[hidden]{display:none}"
+    "@keyframes spin{to{transform:rotate(360deg)}}"
+    "@keyframes ping{75%,100%{transform:scale(2);opacity:0}}"
+    "@keyframes pulse{50%{opacity:.5}}"
+    "@keyframes bounce{0%,100%{transform:translateY(-25%);animation-timing-function:cubic-bezier(0.8,0,1,1)}"
+    "50%{transform:none;animation-timing-function:cubic-bezier(0,0,0.2,1)}}";
 
 /* ---- Building declarations ---- */
 
@@ -1291,6 +1296,20 @@ static bool transitions(out_t* o, const char* u, uint32_t* rank)
             return true;
         }
         return false;
+    }
+    if (starts(u, "animate-", &v))
+    {
+        static const struct { char name[8]; char value[48]; } animations[] = {
+            { "none", "none" }, { "spin", "spin 1s linear infinite" },
+            { "ping", "ping 1s cubic-bezier(0, 0, 0.2, 1) infinite" },
+            { "pulse", "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite" }, { "bounce", "bounce 1s infinite" },
+        };
+        const char* a = LOOKUP(animations, v);
+        if (a == NULL && !arbitrary(v, value, sizeof(value)))
+            return false;
+        decl(o, "animation", (a != NULL) ? a : value);
+        *rank = R_TRANSITION;
+        return true;
     }
     if (starts(u, "duration-", &v) && is_number(v))
     {

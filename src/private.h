@@ -104,7 +104,7 @@ typedef struct
 } box_t;
 
 /* One look of an element: the element as laid out in a state of the page, shown on its conditions */
-#define MAX_VARIANTS        4u
+#define MAX_VARIANTS        8u
 
 typedef struct
 {
@@ -119,6 +119,9 @@ typedef struct
 {
     dmvsi_var_t     bind[DMVSI_BIND_COUNT];
     dmvsi_handler_t click;
+    dmvsi_var_t     text;                           /* The text it shows is this variable's (0: its own) ... */
+    dmvsi_var_t     number;                         /* ... and the number it is (1/1000: parseFloat(innerText)) */
+    const char*     chars;                          /* ... made of these characters */
     variant_t       variants[MAX_VARIANTS];         /* None: it looks as it is */
     uint8_t         variant_count;
 } dynamic_t;
@@ -406,6 +409,12 @@ struct style
     uint8_t     timing_count;
     int16_t     transition_easing[MAX_TRANSITIONS][4];
 
+    const char* animation;                          /* animation-name (NULL: none) ... */
+    uint32_t    animation_ms;                       /* ... -duration */
+    int16_t     animation_easing[4];                /* ... -timing-function (1/1000) */
+    bool        animation_infinite;                 /* ... -iteration-count: infinite (else once) */
+    bool        animation_alternate;                /* ... -direction: alternate */
+
     shadow_t    shadows[MAX_SHADOWS];               /* box-shadow, the first on top */
     uint8_t     shadow_count;
     shadow_t    drops[MAX_SHADOWS];                 /* filter: drop-shadow() */
@@ -473,10 +482,31 @@ typedef struct
     const char*     value;
 } mod_t;
 
+/* @keyframes of the style sheets: their names and blocks (anim.c reads them) */
+typedef struct keyframes keyframes_t;
+struct keyframes
+{
+    keyframes_t*    next;
+    const char*     name;
+    const char*     body;
+    size_t          length;
+};
+
+/* What a script builds in an element of the page as it loads (build.c): emptied, then markup appended */
+typedef struct
+{
+    uint32_t        parent;                         /* Its index */
+    bool            clear;
+    const char*     markup;
+} dom_t;
+
 typedef struct
 {
     arena_t                 arena;
     const char*             path;                   /* The page */
+    const dom_t*            dom;                    /* What the scripts build, applied after parsing (before mods) */
+    keyframes_t*            keyframes;
+    uint32_t                dom_count;
     const mod_t*            mods;                   /* Applied after parsing (run_layout()) */
     uint32_t                mod_count;
     const dmvsi_options_t*  options;
@@ -539,6 +569,7 @@ void    style_compute(conv_t* c, node_t* root);
 /* layout.c */
 void    layout_page(conv_t* c, node_t* root);
 dmvsi_font_t style_font(conv_t* c, style_t* st);
+int32_t text_baseline(conv_t* c, style_t* st);       /* Of a line of its text, from the line's top */
 
 /* dmvs_html.c */
 bool    image_size(const char* path, int32_t* width, int32_t* height);
@@ -549,12 +580,20 @@ node_t* find_id(node_t* n, const char* id, uint32_t depth);
 dmvsi_rect_t group_rect(const conv_t* c, const node_t* n, int32_t ox, int32_t oy);
 void    view_origin(const conv_t* c, int32_t* ox, int32_t* oy);
 
+/* build.c: what the scripts build as the page loads - into `into`'s dom (into->dom_count 0: nothing) */
+int     script_build(conv_t* c, conv_t* into);
+void    apply_dom(conv_t* c);
+node_t* built_element(conv_t* c, uint32_t k);       /* The k-th document.createElement()'s, NULL: none */
+
 /* script.c */
 int     script_compile(conv_t* c);
 void    script_free(conv_t* c);                     /* The states it laid out (after painting) */
 
 /* style.c: the transition of a property (TRANSITION_POSITION, _OPACITY) - false when none */
 bool    style_transition(const style_t* st, uint8_t what, uint16_t* ms, int16_t* easing);
+
+/* anim.c: CSS animations (of a box's position and opacity) as the view's variables and a timer */
+int     animate_page(conv_t* c);
 
 /* dmvs_html.c: a page laid out as it is, or with what a script changed (state.c) */
 int     run_layout(conv_t* c);

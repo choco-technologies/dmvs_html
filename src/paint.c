@@ -38,6 +38,7 @@ typedef struct
 } painter_t;
 
 static int32_t max32(int32_t a, int32_t b) { return (a > b) ? a : b; }
+static int32_t abs32(int32_t a) { return (a < 0) ? -a : a; }
 static int32_t min32(int32_t a, int32_t b) { return (a < b) ? a : b; }
 
 static bool displayed(const node_t* n)
@@ -314,7 +315,8 @@ static bool gradient_paint(const gradient_t* g, int32_t w, int32_t h, dmvsi_pain
  * contain, scale-down, none (its own size) - placed at x, y (%) and clipped
  * to r; blurred with the standard deviation `blur`
  */
-static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit, int16_t x, int16_t y, int32_t blur)
+static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit, int16_t x, int16_t y, int32_t blur,
+                     int32_t radius)
 {
     if (r.w <= 0 || r.h <= 0)
         return;
@@ -323,6 +325,7 @@ static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit
     im.rect = r;
     im.path = path;
     im.blur = blur;
+    im.radius = min32(radius, min32(r.w, r.h) / 2);
     int32_t iw = 0, ih = 0;
     if (fit != FIT_NONE && image_size(path, &iw, &ih) && iw > 0 && ih > 0)
     {
@@ -427,7 +430,8 @@ static void paint_box(painter_t* p, const style_t* st, dmvsi_rect_t r, const int
         fill(p, r, radius, &paint, st);
     }
     if (st->background_url != NULL && st != p->canvas && !p->shadow)
-        image_in(p, st->background_url, r, st->background_size, st->background_x, st->background_y, st->blur);
+        image_in(p, st->background_url, r, st->background_size, st->background_x, st->background_y, st->blur,
+                 whole_view(p, &r) ? 0 : radius_of(st, r.w, r.h));
     if (st->background_image != NULL && st != p->canvas && gradient_paint(st->background_image, r.w, r.h, &paint))
         fill(p, r, radius, &paint, st);
 
@@ -493,13 +497,114 @@ static void paint_decoration(painter_t* p, const style_t* st, dmvsi_rect_t r, co
     paint_box(p, st, r, borders, p->shadowed == NULL || p->shadowed->style != st);
 }
 
+/* The element (n or inside it) whose text a script sets that a text is of - NULL: none */
+static const node_t* text_set(const node_t* text, const node_t* n)
+{
+    for (const node_t* e = text; e != NULL; e = e->parent)
+    {
+        if (e->kind == NODE_ELEMENT && e->dynamic != NULL && e->dynamic->text != 0)
+            return e;
+        if (e == n)
+            break;
+    }
+    return NULL;
+}
+
+/*
+ * The text a script sets: one line of its variable, where its text starts
+ * (f: its first line; NULL - it has none: on its content box's first line).
+ * A block's is placed in its content box by text-align; an inline
+ * element's starts where it does.
+ */
+static void paint_text_var(painter_t* p, const node_t* block, const node_t* e, const frag_t* f)
+{
+    const style_t* st = e->style;
+    if (st == NULL || st->hidden || (st->color >> 24) == 0)
+        return;
+    dmvsi_var_info_t info;
+    if (dmvsi_var_info(p->c->doc, e->dynamic->text, &info) != 0)
+        return;
+    dmvsi_text_t t;
+    memset(&t, 0, sizeof(t));
+    t.var = e->dynamic->text;
+    t.text = info.text;
+    t.length = strlen(info.text);
+    t.chars = e->dynamic->chars;
+    t.font = (f != NULL) ? f->font : style_font(p->c, (style_t*)st);
+    t.paint.color = p->shadow ? times_alpha(p->shadow_color, st->color >> 24) : st->color;
+    if (t.font == NULL)
+        return;
+    if (e == block)
+    {
+        t.x = e->box.ax - p->ox + p->dx + e->box.b[3] + e->box.p[3];
+        t.width = e->box.w - e->box.b[1] - e->box.b[3] - e->box.p[1] - e->box.p[3];
+        t.align = (st->text_align == TEXT_CENTER) ? DMVSI_TEXT_CENTER : (st->text_align == TEXT_RIGHT) ? DMVSI_TEXT_RIGHT : DMVSI_TEXT_LEFT;
+        /*
+         * A box as wide as its text (a flex item, a float): the text it gets may be
+         * longer - room in its parent's content box, placed as the box is in it
+         * (in its middle: centred; at its right: right-aligned; else from where it is)
+         */
+        /* (its parent as narrow too - a column of such items: the first that is wider) */
+        const node_t* q = e->parent;
+        int32_t qx = 0, qw = 0;
+        for (uint32_t up = 0; q != NULL && q->kind == NODE_ELEMENT && q->box.laid_out && up < 4u; q = q->parent, up++)
+        {
+            qx = q->box.ax - p->ox + p->dx + q->box.b[3] + q->box.p[3];
+            qw = q->box.w - q->box.b[1] - q->box.b[3] - q->box.p[1] - q->box.p[3];
+            if (qw > t.width + 2 * DMVSI_UNIT)
+                break;
+        }
+        if (q != NULL && q->kind == NODE_ELEMENT && q->box.laid_out && t.align == DMVSI_TEXT_LEFT)
+        {
+            int32_t mid = t.x + t.width / 2, qmid = qx + qw / 2;
+            if (qw > t.width)
+            {
+                if (mid - qmid <= DMVSI_UNIT && qmid - mid <= DMVSI_UNIT)
+                {
+                    t.x = qx;
+                    t.align = DMVSI_TEXT_CENTER;
+                }
+                else if ((qx + qw) - (t.x + t.width) <= DMVSI_UNIT)
+                {
+                    t.x = qx;
+                    t.align = DMVSI_TEXT_RIGHT;
+                }
+                t.width = (t.align == DMVSI_TEXT_LEFT) ? qx + qw - t.x : qw;
+            }
+        }
+    }
+    else
+        t.x = block->box.ax - p->ox + p->dx + ((f != NULL) ? f->x : 0);
+    if (f != NULL)
+        t.baseline = block->box.ay - p->oy + p->dy + f->y;
+    else
+        t.baseline = e->box.ay - p->oy + p->dy + e->box.b[0] + e->box.p[0] + text_baseline(p->c, (style_t*)st);
+    check(p, dmvsi_add_text(p->c->doc, &t));
+}
+
 /* The lines of text (and inline boxes) a block holds */
 static void paint_lines(painter_t* p, const node_t* n)
 {
+    const node_t* set_painted[8];
+    uint32_t set_count = 0;
     for (const frag_t* f = n->box.frags; f != NULL; f = f->next)
     {
         if (f->style->hidden)
             continue;
+        const node_t* set = (f->kind != FRAG_BOX) ? text_set(f->node, n) : NULL;
+        if (set != NULL)
+        {
+            /* A script's text: its variable, once */
+            bool done = false;
+            for (uint32_t i = 0; i < set_count && !done; i++)
+                done = set_painted[i] == set;
+            if (!done && set_count < 8u)
+            {
+                set_painted[set_count++] = set;
+                paint_text_var(p, n, set, f);
+            }
+            continue;
+        }
         if (f->kind == FRAG_BOX)
         {
             dmvsi_rect_t r = { n->box.ax - p->ox + p->dx + f->x, n->box.ay - p->oy + p->dy + f->y, f->w, f->h };
@@ -520,6 +625,32 @@ static void paint_lines(painter_t* p, const node_t* n)
     }
 }
 
+/*
+ * The corners an image is seen with: its own border-radius, or that of a box
+ * around it that clips (overflow: hidden) and that it fills - a cover in a
+ * round frame (rounded-full overflow-hidden). dmview clips square: the
+ * image's .dmvi is made round (todmvs, todmvi)
+ */
+static int32_t image_radius(painter_t* p, const node_t* n, const dmvsi_rect_t* shown)
+{
+    int32_t own = radius_of(n->style, shown->w, shown->h);
+    if (own > 0)
+        return own;
+    const node_t* a = n->parent;
+    for (uint32_t up = 0; a != NULL && a->kind == NODE_ELEMENT && a->style != NULL && up < 3u; a = a->parent, up++)
+    {
+        dmvsi_rect_t r = border_box(p, a);
+        dmvsi_rect_t in = inner(&r, a->box.b);
+        int32_t radius = radius_of(a->style, r.w, r.h);
+        if (radius <= 0 || !clips(a->style))
+            continue;
+        bool fills = abs32(in.x - shown->x) <= U && abs32(in.y - shown->y) <= U && abs32(in.w - shown->w) <= U &&
+                     abs32(in.h - shown->h) <= U;
+        return fills ? max32(radius - max32(a->box.b[0], a->box.b[3]), 0) : 0;
+    }
+    return 0;
+}
+
 static void paint_image(painter_t* p, const node_t* n)
 {
     const char* src = node_attr(n, "src");
@@ -529,7 +660,8 @@ static void paint_image(painter_t* p, const node_t* n)
     dmvsi_rect_t r = border_box(p, n);
     dmvsi_rect_t b = inner(&r, n->box.b);
     const style_t* st = n->style;
-    image_in(p, path, inner(&b, n->box.p), st->object_fit, st->object_x, st->object_y, st->blur);
+    dmvsi_rect_t shown = inner(&b, n->box.p);
+    image_in(p, path, shown, st->object_fit, st->object_x, st->object_y, st->blur, image_radius(p, n, &shown));
 }
 
 /* An inline <svg>: its subtree as an SVG file of its content box's size */
@@ -611,6 +743,25 @@ static void sort_layers(layers_t* l)
 }
 
 /* The box itself, then what it holds (in a clipping group when it clips), its layers among them */
+/*
+ * How far down what is in a box goes, from its padding box's top, with its
+ * bottom padding: what can be scrolled to (a flex column of a definite height
+ * is laid out as tall as it is, its items further)
+ */
+static int32_t scroll_extent(const node_t* n)
+{
+    int32_t top = n->box.ay + n->box.b[0], bottom = 0;
+    for (const node_t* k = n->first; k != NULL; k = k->next)
+    {
+        if (k->kind != NODE_ELEMENT || !k->box.placed || k->style == NULL || k->style->display == DISPLAY_NONE)
+            continue;
+        int32_t end = k->box.ay + k->box.h + k->box.m[2] - top;
+        if (end > bottom)
+            bottom = end;
+    }
+    return (bottom > 0) ? bottom + n->box.p[2] : 0;
+}
+
 static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
 {
     style_t* st = n->style;
@@ -632,6 +783,9 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
         g.opacity = 255;
         g.name = n->id;
         int32_t content_h = n->box.content_h + n->box.p[0] + n->box.p[2];
+        int32_t extent = scroll_extent(n);
+        if (extent > content_h)
+            content_h = extent;
         if ((st->overflow_y == OVERFLOW_AUTO || st->overflow_y == OVERFLOW_SCROLL) && content_h > g.rect.h)
         {
             g.scroll_w = g.rect.w;
@@ -650,6 +804,8 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
     for (; layers != NULL && i < layers->count && layers->items[i].z < 0; i++)
         paint_context(p, layers->items[i].node, depth + 1U);
     paint_lines(p, n);
+    if (n->dynamic != NULL && n->dynamic->text != 0 && n->box.frags == NULL)
+        paint_text_var(p, n, n, NULL);          /* A script's text in what has none yet */
     paint_flow(p, n, depth + 1U);
     for (; layers != NULL && i < layers->count; i++)
         paint_context(p, layers->items[i].node, depth + 1U);
@@ -743,6 +899,8 @@ static void paint_flow_element(painter_t* p, node_t* k, uint32_t depth)
         else if (node_is(k, "svg"))
             paint_svg(p, k);
         paint_lines(p, k);
+        if (k->dynamic != NULL && k->dynamic->text != 0 && k->box.frags == NULL && k->style->display != DISPLAY_INLINE)
+            paint_text_var(p, k, k, NULL);      /* A script's text in what has none yet */
     }
     paint_flow(p, k, depth + 1U);
     end_dynamic(p, dynamic);

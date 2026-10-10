@@ -173,6 +173,12 @@ static int32_t line_height(conv_t* c, style_t* st)
     }
 }
 
+int32_t text_baseline(conv_t* c, style_t* st)
+{
+    metrics_t m = metrics(c, st);
+    return (line_height(c, st) - (m.ascent + m.descent)) / 2 + m.ascent;
+}
+
 /* ---- Text ---- */
 
 static uint32_t to_upper(uint32_t c)
