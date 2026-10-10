@@ -597,3 +597,69 @@ DMOD_TEST_STEP(dmvs_html_converts_texts_and_timers)
     DMOD_TEST_EXPECT_TRUE(dmvsi_timer_at(doc, 0, &ms, &h) && ms >= 10 && ms <= 50 && h != 0);
     dmvsi_free(doc);
 }
+
+/* The groups clicked whose handler sets a variable */
+static uint32_t clicks_setting(dmvsi_doc_t doc, const dmvsi_node_t* n, dmvsi_var_t var)
+{
+    uint32_t count = 0;
+    for (; n != NULL; n = n->next)
+    {
+        if (n->kind != DMVSI_NODE_GROUP)
+            continue;
+        if (n->click != 0)
+        {
+            const dmvsi_action_t* a = NULL;
+            uint32_t k = flat_actions(doc, n->click, &a);
+            bool sets = false;
+            for (uint32_t i = 0; i < k && !sets; i++)
+                sets = a[i].kind == DMVSI_ACT_SET && a[i].var == var;
+            count += sets ? 1U : 0U;
+        }
+        count += clicks_setting(doc, n->first, var);
+    }
+    return count;
+}
+
+DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("build.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0; font-family: sans-serif } #screen { width: 200px; height: 120px }"
+        ".row { height: 20px } .on { background: #36f } #title { height: 20px }"
+        "</style></head><body><div id=\"screen\"><div id=\"title\">-</div>"
+        "<div id=\"list\"><!-- the script's --></div></div><script>"
+        "const songs = [{ t: 'One', s: 65 }, { t: 'Two', s: 130 }, { t: 'Three', s: 7 }];\n"
+        "let current = 1;\n"
+        "const list = document.getElementById('list');\n"
+        "function time(s) { return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }\n"
+        "function render() {\n"
+        "  list.innerHTML = '';\n"
+        "  songs.forEach((song, i) => {\n"
+        "    const div = document.createElement('div');\n"
+        "    div.className = `row ${i === current ? 'on' : ''}`;\n"
+        "    div.innerHTML = `<span>${song.t}</span> <b>${time(song.s)}</b>`;\n"
+        "    div.onclick = () => { current = i; document.getElementById('title').innerText = song.t; };\n"
+        "    list.appendChild(div);\n"
+        "  });\n"
+        "}\n"
+        "render();\n"
+        "</script></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("build.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    const dmvsi_node_t* root = dmvsi_root(doc);
+
+    /* The rows as the page loads: their texts, the current one's background, each clicked */
+    DMOD_TEST_EXPECT_TRUE(find(root->first, DMVSI_NODE_TEXT, "One", NULL) != NULL);
+    DMOD_TEST_EXPECT_TRUE(find(root->first, DMVSI_NODE_TEXT, "2:10", NULL) != NULL);
+    DMOD_TEST_EXPECT_TRUE(find(root->first, DMVSI_NODE_TEXT, "0:07", NULL) != NULL);
+    dmvsi_rect_t on = { 0, DMVSI_PX(40), DMVSI_PX(200), DMVSI_PX(20) };
+    const dmvsi_node_t* fill = find(root->first, DMVSI_NODE_RECT, NULL, &on);
+    DMOD_TEST_EXPECT_TRUE(fill != NULL && fill->u.fill.paint.color == 0xFF3366FFu);
+    dmvsi_var_t title = var_named(doc, "title_text");
+    uint32_t clicked = clicks_setting(doc, root->first, title);
+    DMOD_TEST_EXPECT_EQ(clicked, 3u);
+    dmvsi_free(doc);
+}

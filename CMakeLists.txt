@@ -71,6 +71,7 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     src/paint.c
     src/svg.c
     src/script.c
+    src/build.c
 )
 
 dmod_link_modules(${DMOD_MODULE_NAME}

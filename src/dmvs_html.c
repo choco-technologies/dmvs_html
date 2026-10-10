@@ -608,6 +608,7 @@ int run_layout(conv_t* c)
         return c->arena.failed ? -ENOMEM : -ENOENT;
     if ((c->document = html_parse(c, text, size)) == NULL)
         return c->arena.failed ? -ENOMEM : -EBADMSG;
+    apply_dom(c);
     for (uint32_t i = 0; i < c->mod_count; i++)
         apply_mod(c, &c->mods[i]);
     load_sheets(c, c->document, 0);
@@ -632,6 +633,36 @@ dmod_dmvsi_dif_api_declaration(1.0, dmvs_html, int, _convert, ( const char* path
     c->path = arena_strndup(&c->arena, path, strlen(path));
 
     int status = (c->path != NULL) ? run_layout(c) : -ENOMEM;
+    if (status == 0)
+    {
+        /* What its scripts build as it loads: the page laid out with it (a conversion of its own) */
+        conv_t* built = Dmod_Malloc(sizeof(*built));
+        if (built == NULL)
+            status = -ENOMEM;
+        else
+        {
+            memset(built, 0, sizeof(*built));
+            built->options = c->options;
+            built->doc = c->doc;
+            built->vw = c->vw;
+            built->vh = c->vh;
+            built->path = arena_strndup(&built->arena, path, strlen(path));
+            status = script_build(c, built);
+            if (status == 0 && built->dom_count > 0)
+            {
+                built->warnings = c->warnings;
+                arena_free(&c->arena);
+                Dmod_Free(c);
+                c = built;
+                status = run_layout(c);
+            }
+            else
+            {
+                arena_free(&built->arena);
+                Dmod_Free(built);
+            }
+        }
+    }
     if (status == 0)
         status = script_compile(c);     /* What its scripts do: variables, handlers */
     if (status == 0)

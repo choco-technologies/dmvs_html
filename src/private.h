@@ -476,10 +476,20 @@ typedef struct
     const char*     value;
 } mod_t;
 
+/* What a script builds in an element of the page as it loads (build.c): emptied, then markup appended */
+typedef struct
+{
+    uint32_t        parent;                         /* Its index */
+    bool            clear;
+    const char*     markup;
+} dom_t;
+
 typedef struct
 {
     arena_t                 arena;
     const char*             path;                   /* The page */
+    const dom_t*            dom;                    /* What the scripts build, applied after parsing (before mods) */
+    uint32_t                dom_count;
     const mod_t*            mods;                   /* Applied after parsing (run_layout()) */
     uint32_t                mod_count;
     const dmvsi_options_t*  options;
@@ -552,6 +562,11 @@ int     paint_page(conv_t* c, node_t* root);
 node_t* find_id(node_t* n, const char* id, uint32_t depth);
 dmvsi_rect_t group_rect(const conv_t* c, const node_t* n, int32_t ox, int32_t oy);
 void    view_origin(const conv_t* c, int32_t* ox, int32_t* oy);
+
+/* build.c: what the scripts build as the page loads - into `into`'s dom (into->dom_count 0: nothing) */
+int     script_build(conv_t* c, conv_t* into);
+void    apply_dom(conv_t* c);
+node_t* built_element(conv_t* c, uint32_t k);       /* The k-th document.createElement()'s, NULL: none */
 
 /* script.c */
 int     script_compile(conv_t* c);

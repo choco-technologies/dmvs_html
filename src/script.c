@@ -161,11 +161,29 @@ typedef struct
     uint32_t            wide[MAX_WIDE_CHARS];
     uint32_t            wide_count;
     const char*         chars;
+    uint32_t            made;                   /* document.createElement() so far: the k-th is the build's */
 } script_t;
 
 static void report(script_t* sc, const char* what)
 {
     dmvs_js_report(sc->js, what);
+}
+
+/* An element the scripts built as the page loaded (build.c): what they set of it is as it was then */
+static bool is_built(const node_t* e)
+{
+    return e != NULL && e->kind == NODE_ELEMENT && node_attr(e, "data-dmvs-built") != NULL;
+}
+
+/* Holding what the scripts built: emptying it, appending to it, is what the build did */
+static bool holds_built(const node_t* e)
+{
+    for (const node_t* k = (e != NULL) ? e->first : NULL; k != NULL; k = k->next)
+    {
+        if (is_built(k))
+            return true;
+    }
+    return false;
 }
 
 static const char* label_of(const node_t* e)
@@ -656,6 +674,10 @@ static int host_set(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* obj
     }
     if (kind != H_ELEMENT || e == NULL)
         return -ENOTSUP;
+    if (is_built(e) && (strcmp(name, "className") == 0 || strcmp(name, "innerHTML") == 0 || strcmp(name, "id") == 0))
+        return 0;                           /* As the build made it */
+    if (holds_built(e) && strcmp(name, "innerHTML") == 0)
+        return 0;                           /* Emptied to be built anew: as the build left it */
     if (strcmp(name, "innerText") == 0 || strcmp(name, "textContent") == 0)
     {
         set_text(sc, e, value);
@@ -797,6 +819,29 @@ static int host_call(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* ob
     }
     if ((strcmp(method, "querySelector") == 0 || strcmp(method, "querySelectorAll") == 0) && count == 1)
         return select_elements(sc, under, &args[0], method[13] == 'A', result);
+    if (kind == H_DOCUMENT && strcmp(method, "createElement") == 0)
+    {
+        /* The k-th: the element the build made (when it was put in the page) */
+        node_t* made = built_element(sc->c, ++sc->made);
+        if (made == NULL)
+        {
+            report(sc, "an element made that is not in the page as it loads - not converted");
+            return 0;
+        }
+        *result = element_value(sc, made);
+        return 0;
+    }
+    if (strcmp(method, "appendChild") == 0 && count == 1)
+    {
+        node_t* child;
+        dmvsi_var_t held;
+        if (object_of(sc, &args[0], &child, &held) == H_ELEMENT && is_built(child))
+        {
+            *result = args[0];
+            return 0;                       /* Where the build put it */
+        }
+        return -ENOTSUP;
+    }
     if (kind != H_ELEMENT)
         return -ENOTSUP;
     if (strcmp(method, "getAttribute") == 0 && count == 1)
@@ -938,6 +983,8 @@ static conv_t* run_state(script_t* sc, const mod_t* a, const mod_t* b, int* stat
     s->vw = c->vw;
     s->vh = c->vh;
     s->path = c->path;
+    s->dom = c->dom;                        /* What the scripts built */
+    s->dom_count = c->dom_count;
     st->mods[st->count][0] = *a;
     if (b != NULL)
         st->mods[st->count][1] = *b;

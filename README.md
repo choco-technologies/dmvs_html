@@ -122,8 +122,16 @@ up.addEventListener('click', () =>               // parseFloat(innerText): the n
   `onclick="..."` are a click handler. `this` is the element, and
   `el.click()` runs its handlers.
 
+- **What scripts build as the page loads** (`createElement`, `className`,
+  `innerHTML` with markup, `appendChild`; a list rendered from an array)
+  is part of the page. dmvs_js evaluates the loading as a browser runs
+  it, the elements are laid out with the page, and their listeners are
+  clicks (`div.onclick = () => play(i)`). A list rebuilt later stays as
+  it was when the page loaded.
+- `innerHTML` set to text (`'22.0&deg;'`) is the element's text.
+
 What's reported and left out:
-- elements made or replaced (`createElement`, `innerHTML`);
+- elements made or replaced later, while the view runs;
 - `src`, `setAttribute`;
 - a style known only at runtime;
 - a style that changes how an element looks (other than its opacity);
