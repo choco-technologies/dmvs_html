@@ -38,6 +38,7 @@ typedef struct
 } painter_t;
 
 static int32_t max32(int32_t a, int32_t b) { return (a > b) ? a : b; }
+static int32_t abs32(int32_t a) { return (a < 0) ? -a : a; }
 static int32_t min32(int32_t a, int32_t b) { return (a < b) ? a : b; }
 
 static bool displayed(const node_t* n)
@@ -314,7 +315,8 @@ static bool gradient_paint(const gradient_t* g, int32_t w, int32_t h, dmvsi_pain
  * contain, scale-down, none (its own size) - placed at x, y (%) and clipped
  * to r; blurred with the standard deviation `blur`
  */
-static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit, int16_t x, int16_t y, int32_t blur)
+static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit, int16_t x, int16_t y, int32_t blur,
+                     int32_t radius)
 {
     if (r.w <= 0 || r.h <= 0)
         return;
@@ -323,6 +325,7 @@ static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit
     im.rect = r;
     im.path = path;
     im.blur = blur;
+    im.radius = min32(radius, min32(r.w, r.h) / 2);
     int32_t iw = 0, ih = 0;
     if (fit != FIT_NONE && image_size(path, &iw, &ih) && iw > 0 && ih > 0)
     {
@@ -427,7 +430,8 @@ static void paint_box(painter_t* p, const style_t* st, dmvsi_rect_t r, const int
         fill(p, r, radius, &paint, st);
     }
     if (st->background_url != NULL && st != p->canvas && !p->shadow)
-        image_in(p, st->background_url, r, st->background_size, st->background_x, st->background_y, st->blur);
+        image_in(p, st->background_url, r, st->background_size, st->background_x, st->background_y, st->blur,
+                 whole_view(p, &r) ? 0 : radius_of(st, r.w, r.h));
     if (st->background_image != NULL && st != p->canvas && gradient_paint(st->background_image, r.w, r.h, &paint))
         fill(p, r, radius, &paint, st);
 
@@ -621,6 +625,32 @@ static void paint_lines(painter_t* p, const node_t* n)
     }
 }
 
+/*
+ * The corners an image is seen with: its own border-radius, or that of a box
+ * around it that clips (overflow: hidden) and that it fills - a cover in a
+ * round frame (rounded-full overflow-hidden). dmview clips square: the
+ * image's .dmvi is made round (todmvs, todmvi)
+ */
+static int32_t image_radius(painter_t* p, const node_t* n, const dmvsi_rect_t* shown)
+{
+    int32_t own = radius_of(n->style, shown->w, shown->h);
+    if (own > 0)
+        return own;
+    const node_t* a = n->parent;
+    for (uint32_t up = 0; a != NULL && a->kind == NODE_ELEMENT && a->style != NULL && up < 3u; a = a->parent, up++)
+    {
+        dmvsi_rect_t r = border_box(p, a);
+        dmvsi_rect_t in = inner(&r, a->box.b);
+        int32_t radius = radius_of(a->style, r.w, r.h);
+        if (radius <= 0 || !clips(a->style))
+            continue;
+        bool fills = abs32(in.x - shown->x) <= U && abs32(in.y - shown->y) <= U && abs32(in.w - shown->w) <= U &&
+                     abs32(in.h - shown->h) <= U;
+        return fills ? max32(radius - max32(a->box.b[0], a->box.b[3]), 0) : 0;
+    }
+    return 0;
+}
+
 static void paint_image(painter_t* p, const node_t* n)
 {
     const char* src = node_attr(n, "src");
@@ -630,7 +660,8 @@ static void paint_image(painter_t* p, const node_t* n)
     dmvsi_rect_t r = border_box(p, n);
     dmvsi_rect_t b = inner(&r, n->box.b);
     const style_t* st = n->style;
-    image_in(p, path, inner(&b, n->box.p), st->object_fit, st->object_x, st->object_y, st->blur);
+    dmvsi_rect_t shown = inner(&b, n->box.p);
+    image_in(p, path, shown, st->object_fit, st->object_x, st->object_y, st->blur, image_radius(p, n, &shown));
 }
 
 /* An inline <svg>: its subtree as an SVG file of its content box's size */

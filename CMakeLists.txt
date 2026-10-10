@@ -72,6 +72,7 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     src/svg.c
     src/script.c
     src/build.c
+    src/anim.c
 )
 
 dmod_link_modules(${DMOD_MODULE_NAME}

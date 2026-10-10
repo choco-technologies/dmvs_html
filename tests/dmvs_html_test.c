@@ -682,3 +682,39 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
     DMOD_TEST_EXPECT_TRUE(count_texts(root->first, "Two") >= 2u);
     dmvsi_free(doc);
 }
+
+DMOD_TEST_STEP(dmvs_html_converts_css_animations)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("anim.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { width: 100px; height: 40px }"
+        "@keyframes bob { 0%, 100% { transform: translateY(-4px); animation-timing-function: ease-in } 50% { transform: none } }"
+        "#bar { width: 3px; height: 12px; margin-top: 10px; background: #36f; animation: bob 0.8s infinite alternate }"
+        "</style></head><body><div id=\"screen\"><div id=\"bar\"></div></div></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("anim.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    /* Its y a variable, 4 px up as it starts; a timer moving it there and back, 400 ms each way */
+    const dmvsi_node_t* bar = group_named(dmvsi_root(doc)->first, "bar");
+    DMOD_TEST_EXPECT_TRUE(bar != NULL && bar->bind[DMVSI_BIND_Y] != 0);
+    if (bar != NULL)
+        DMOD_TEST_EXPECT_EQ(var_initial(doc, bar->bind[DMVSI_BIND_Y]), DMVSI_PX(6));
+    uint16_t ms = 0;
+    dmvsi_handler_t h = 0;
+    DMOD_TEST_EXPECT_TRUE(dmvsi_timer_at(doc, 0, &ms, &h) && ms == 20u);
+    const dmvsi_action_t* a = NULL;
+    uint32_t n = (h != 0) ? dmvsi_handler_actions(doc, h, &a) : 0;
+    uint32_t animates = 0, down = 0;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        if (a[i].kind != DMVSI_ACT_ANIMATE || bar == NULL || a[i].var != bar->bind[DMVSI_BIND_Y])
+            continue;
+        animates++;
+        down += (a[i].value == DMVSI_PX(10) && a[i].duration == 400 && a[i].easing[0] == 420) ? 1U : 0U;
+    }
+    DMOD_TEST_EXPECT_EQ(animates, 4u);              /* 0 -> 50 -> 100, and back */
+    DMOD_TEST_EXPECT_TRUE(down >= 1u);
+    dmvsi_free(doc);
+}

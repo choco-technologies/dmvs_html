@@ -666,6 +666,8 @@ dmod_dmvsi_dif_api_declaration(1.0, dmvs_html, int, _convert, ( const char* path
     if (status == 0)
         status = script_compile(c);     /* What its scripts do: variables, handlers */
     if (status == 0)
+        status = animate_page(c);       /* Its CSS animations: variables and a timer */
+    if (status == 0)
         status = paint_page(c, c->document);
     script_free(c);
     if (c->arena.failed)

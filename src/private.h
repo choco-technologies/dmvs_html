@@ -409,6 +409,12 @@ struct style
     uint8_t     timing_count;
     int16_t     transition_easing[MAX_TRANSITIONS][4];
 
+    const char* animation;                          /* animation-name (NULL: none) ... */
+    uint32_t    animation_ms;                       /* ... -duration */
+    int16_t     animation_easing[4];                /* ... -timing-function (1/1000) */
+    bool        animation_infinite;                 /* ... -iteration-count: infinite (else once) */
+    bool        animation_alternate;                /* ... -direction: alternate */
+
     shadow_t    shadows[MAX_SHADOWS];               /* box-shadow, the first on top */
     uint8_t     shadow_count;
     shadow_t    drops[MAX_SHADOWS];                 /* filter: drop-shadow() */
@@ -476,6 +482,16 @@ typedef struct
     const char*     value;
 } mod_t;
 
+/* @keyframes of the style sheets: their names and blocks (anim.c reads them) */
+typedef struct keyframes keyframes_t;
+struct keyframes
+{
+    keyframes_t*    next;
+    const char*     name;
+    const char*     body;
+    size_t          length;
+};
+
 /* What a script builds in an element of the page as it loads (build.c): emptied, then markup appended */
 typedef struct
 {
@@ -489,6 +505,7 @@ typedef struct
     arena_t                 arena;
     const char*             path;                   /* The page */
     const dom_t*            dom;                    /* What the scripts build, applied after parsing (before mods) */
+    keyframes_t*            keyframes;
     uint32_t                dom_count;
     const mod_t*            mods;                   /* Applied after parsing (run_layout()) */
     uint32_t                mod_count;
@@ -574,6 +591,9 @@ void    script_free(conv_t* c);                     /* The states it laid out (a
 
 /* style.c: the transition of a property (TRANSITION_POSITION, _OPACITY) - false when none */
 bool    style_transition(const style_t* st, uint8_t what, uint16_t* ms, int16_t* easing);
+
+/* anim.c: CSS animations (of a box's position and opacity) as the view's variables and a timer */
+int     animate_page(conv_t* c);
 
 /* dmvs_html.c: a page laid out as it is, or with what a script changed (state.c) */
 int     run_layout(conv_t* c);
