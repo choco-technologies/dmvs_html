@@ -76,7 +76,7 @@ dmod_add_library(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
 )
 
 dmod_link_modules(${DMOD_MODULE_NAME}
-    dmvsi@>=0.4
+    dmvsi@>=0.5
     dmvs_js@>=0.1
 )
 
