@@ -661,6 +661,18 @@ static int host_set(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* obj
         set_text(sc, e, value);
         return 0;
     }
+    if (strcmp(name, "innerHTML") == 0)
+    {
+        /* Text (its character references decoded by the compiler) in what holds no elements: its text */
+        const char* text = static_text(sc, value);
+        bool elements = false;
+        for (const node_t* k = e->first; k != NULL && !elements; k = k->next)
+            elements = k->kind == NODE_ELEMENT;
+        if (elements || (text != NULL && strchr(text, '<') != NULL))
+            return -ENOTSUP;                /* Elements made or replaced */
+        set_text(sc, e, value);
+        return 0;
+    }
     if (strcmp(name, "onclick") == 0)
         return add_listener(sc, e, value);
     return -ENOTSUP;
