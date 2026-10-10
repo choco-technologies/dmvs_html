@@ -712,6 +712,25 @@ static void sort_layers(layers_t* l)
 }
 
 /* The box itself, then what it holds (in a clipping group when it clips), its layers among them */
+/*
+ * How far down what is in a box goes, from its padding box's top, with its
+ * bottom padding: what can be scrolled to (a flex column of a definite height
+ * is laid out as tall as it is, its items further)
+ */
+static int32_t scroll_extent(const node_t* n)
+{
+    int32_t top = n->box.ay + n->box.b[0], bottom = 0;
+    for (const node_t* k = n->first; k != NULL; k = k->next)
+    {
+        if (k->kind != NODE_ELEMENT || !k->box.placed || k->style == NULL || k->style->display == DISPLAY_NONE)
+            continue;
+        int32_t end = k->box.ay + k->box.h + k->box.m[2] - top;
+        if (end > bottom)
+            bottom = end;
+    }
+    return (bottom > 0) ? bottom + n->box.p[2] : 0;
+}
+
 static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
 {
     style_t* st = n->style;
@@ -733,6 +752,9 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
         g.opacity = 255;
         g.name = n->id;
         int32_t content_h = n->box.content_h + n->box.p[0] + n->box.p[2];
+        int32_t extent = scroll_extent(n);
+        if (extent > content_h)
+            content_h = extent;
         if ((st->overflow_y == OVERFLOW_AUTO || st->overflow_y == OVERFLOW_SCROLL) && content_h > g.rect.h)
         {
             g.scroll_w = g.rect.w;
