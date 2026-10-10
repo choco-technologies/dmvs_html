@@ -119,6 +119,9 @@ typedef struct
 {
     dmvsi_var_t     bind[DMVSI_BIND_COUNT];
     dmvsi_handler_t click;
+    dmvsi_var_t     text;                           /* The text it shows is this variable's (0: its own) ... */
+    dmvsi_var_t     number;                         /* ... and the number it is (1/1000: parseFloat(innerText)) */
+    const char*     chars;                          /* ... made of these characters */
     variant_t       variants[MAX_VARIANTS];         /* None: it looks as it is */
     uint8_t         variant_count;
 } dynamic_t;
@@ -539,6 +542,7 @@ void    style_compute(conv_t* c, node_t* root);
 /* layout.c */
 void    layout_page(conv_t* c, node_t* root);
 dmvsi_font_t style_font(conv_t* c, style_t* st);
+int32_t text_baseline(conv_t* c, style_t* st);       /* Of a line of its text, from the line's top */
 
 /* dmvs_html.c */
 bool    image_size(const char* path, int32_t* width, int32_t* height);

@@ -247,6 +247,30 @@ static int32_t var_initial(dmvsi_doc_t doc, dmvsi_var_t var)
     return v;
 }
 
+
+/* A handler's actions with the handlers it calls in their place (scripts are compiled into calls) */
+static dmvsi_action_t g_flat[256];
+
+static uint32_t flatten_into(dmvsi_doc_t doc, dmvsi_handler_t h, uint32_t n, uint32_t depth)
+{
+    const dmvsi_action_t* a = NULL;
+    uint32_t count = dmvsi_handler_actions(doc, h, &a);
+    for (uint32_t i = 0; i < count && n < 256u; i++)
+    {
+        if (a[i].kind == DMVSI_ACT_CALL && depth < 8u)
+            n = flatten_into(doc, a[i].handler, n, depth + 1U);
+        else
+            g_flat[n++] = a[i];
+    }
+    return n;
+}
+
+static uint32_t flat_actions(dmvsi_doc_t doc, dmvsi_handler_t h, const dmvsi_action_t** actions)
+{
+    *actions = g_flat;
+    return flatten_into(doc, h, 0, 0);
+}
+
 DMOD_TEST_STEP(dmvs_html_converts_what_scripts_do)
 {
     int status = -1;
@@ -291,7 +315,7 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_do)
     if (open != NULL && win != NULL && home != NULL)
     {
         const dmvsi_action_t* a = NULL;
-        uint32_t n = dmvsi_handler_actions(doc, open->click, &a);
+        uint32_t n = flat_actions(doc, open->click, &a);
         DMOD_TEST_EXPECT_EQ(n, 3u);
         DMOD_TEST_EXPECT_TRUE(n >= 3 && a[0].kind == DMVSI_ACT_ANIMATE && a[0].var == win->bind[DMVSI_BIND_Y] && a[0].value == 0 &&
                               a[0].duration == 300 && a[0].easing[2] == 580);
@@ -310,7 +334,7 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_do)
     if (close != NULL)
     {
         const dmvsi_action_t* a = NULL;
-        uint32_t n = dmvsi_handler_actions(doc, close->click, &a);
+        uint32_t n = flat_actions(doc, close->click, &a);
         DMOD_TEST_EXPECT_TRUE(n >= 6 && a[0].kind == DMVSI_ACT_IF_NE && a[0].value == 0);
         DMOD_TEST_EXPECT_TRUE(n >= 6 && a[1].kind == DMVSI_ACT_IF_EQ);                     /* current is the window */
         DMOD_TEST_EXPECT_TRUE(n >= 6 && a[2].kind == DMVSI_ACT_ANIMATE && a[2].value == DMVSI_PX(100));
@@ -323,9 +347,10 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_do)
     if (light != NULL)
     {
         const dmvsi_action_t* a = NULL;
-        uint32_t n = dmvsi_handler_actions(doc, light->click, &a);
-        DMOD_TEST_EXPECT_TRUE(n == 9 && a[0].kind == DMVSI_ACT_TOGGLE && a[1].kind == DMVSI_ACT_IF_NE);
-        DMOD_TEST_EXPECT_TRUE(n == 9 && a[3].kind == DMVSI_ACT_SET && a[3].value == DMVSI_PX(30));    /* no transition: at once */
+        uint32_t n = flat_actions(doc, light->click, &a);
+        DMOD_TEST_EXPECT_TRUE(n == 8 && a[0].kind == DMVSI_ACT_TOGGLE && a[1].kind == DMVSI_ACT_IF_NE);
+        DMOD_TEST_EXPECT_TRUE(n == 8 && a[3].kind == DMVSI_ACT_SET && a[3].value == DMVSI_PX(30));    /* no transition: at once */
+        DMOD_TEST_EXPECT_TRUE(n == 8 && a[4].kind == DMVSI_ACT_ELSE && a[6].value == 0 && a[7].kind == DMVSI_ACT_END);
     }
     dmvsi_free(doc);
 }
@@ -473,11 +498,102 @@ DMOD_TEST_STEP(dmvs_html_converts_listeners)
     if (a != NULL && b != NULL)
     {
         const dmvsi_action_t* acts = NULL;
-        uint32_t n = dmvsi_handler_actions(doc, b->click, &acts);
+        uint32_t n = flat_actions(doc, b->click, &acts);
         bool sets = false;
         for (uint32_t i = 0; i < n; i++)
             sets = sets || acts[i].kind == DMVSI_ACT_SET;
         DMOD_TEST_EXPECT_TRUE(sets);
     }
+    dmvsi_free(doc);
+}
+
+/* The first text node shown by a variable */
+static const dmvsi_node_t* text_of_var(const dmvsi_node_t* n, dmvsi_var_t var)
+{
+    for (; n != NULL; n = n->next)
+    {
+        if (n->kind == DMVSI_NODE_TEXT && n->u.text.var == var && var != 0)
+            return n;
+        if (n->kind == DMVSI_NODE_GROUP)
+        {
+            const dmvsi_node_t* f = text_of_var(n->first, var);
+            if (f != NULL)
+                return f;
+        }
+    }
+    return NULL;
+}
+
+/* A variable by its name */
+static dmvsi_var_t var_named(dmvsi_doc_t doc, const char* name)
+{
+    dmvsi_var_info_t info;
+    for (dmvsi_var_t v = 1; dmvsi_var_info(doc, v, &info) == 0; v++)
+        if (strcmp(info.name, name) == 0)
+            return v;
+    return 0;
+}
+
+DMOD_TEST_STEP(dmvs_html_converts_texts_and_timers)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("texts.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0; font-family: sans-serif } #screen { width: 200px; height: 100px }"
+        "#speed { width: 100px; text-align: center; font-size: 20px } #temp { width: 80px }"
+        "</style></head><body><div id=\"screen\">"
+        "<div id=\"speed\"></div><div id=\"temp\">21.5\xC2\xB0" "C</div>"
+        "<div id=\"up\" style=\"width: 20px; height: 20px\"></div>"
+        "</div><script>"
+        "const speedText = document.getElementById('speed');\n"
+        "let speed = 0;\n"
+        "const interval = setInterval(() => {\n"
+        "  speed += 2;\n"
+        "  if (speed >= 68) { speed = 68; clearInterval(interval); }\n"
+        "  speedText.innerText = speed;\n"
+        "}, 35);\n"
+        "const t = document.getElementById('temp');\n"
+        "document.getElementById('up').addEventListener('click', () => {\n"
+        "  t.innerText = (parseFloat(t.innerText) + 0.5).toFixed(1) + '\xC2\xB0" "C';\n"
+        "});\n"
+        "</script></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("texts.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    const dmvsi_node_t* root = dmvsi_root(doc);
+
+    /* #speed: empty at first - a text of its variable, centred in its box (the scripts' characters: in its font) */
+    dmvsi_var_t speed = var_named(doc, "speed_text");
+    const dmvsi_node_t* st = text_of_var(root, speed);
+    DMOD_TEST_EXPECT_TRUE(speed != 0 && st != NULL);
+    if (st != NULL)
+    {
+        DMOD_TEST_EXPECT_TRUE(st->u.text.align == DMVSI_TEXT_CENTER && st->u.text.width == DMVSI_PX(100));
+    }
+    /* #temp: its text and its number (21.5) - the click sets both */
+    dmvsi_var_t temp = var_named(doc, "temp_text");
+    dmvsi_var_t number = var_named(doc, "temp_number");
+    DMOD_TEST_EXPECT_TRUE(text_of_var(root, temp) != NULL && var_initial(doc, number) == 21500);
+    dmvsi_var_info_t info;
+    DMOD_TEST_EXPECT_TRUE(dmvsi_var_info(doc, temp, &info) == 0 && strcmp(info.text, "21.5\xC2\xB0" "C") == 0);
+    const dmvsi_node_t* up = group_named(root->first, "up");
+    DMOD_TEST_EXPECT_TRUE(up != NULL && up->click != 0);
+    if (up != NULL)
+    {
+        const dmvsi_action_t* a = NULL;
+        uint32_t n = flat_actions(doc, up->click, &a);
+        bool sets_text = false, sets_number = false;
+        for (uint32_t i = 0; i < n; i++)
+        {
+            sets_text = sets_text || (a[i].kind == DMVSI_ACT_SET && a[i].var == temp);
+            sets_number = sets_number || (a[i].kind == DMVSI_ACT_SET && a[i].var == number);
+        }
+        DMOD_TEST_EXPECT_TRUE(sets_text && sets_number);
+    }
+    /* The interval: a timer of the view */
+    uint16_t ms = 0;
+    dmvsi_handler_t h = 0;
+    DMOD_TEST_EXPECT_TRUE(dmvsi_timer_at(doc, 0, &ms, &h) && ms >= 10 && ms <= 50 && h != 0);
     dmvsi_free(doc);
 }

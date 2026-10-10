@@ -493,13 +493,81 @@ static void paint_decoration(painter_t* p, const style_t* st, dmvsi_rect_t r, co
     paint_box(p, st, r, borders, p->shadowed == NULL || p->shadowed->style != st);
 }
 
+/* The element (n or inside it) whose text a script sets that a text is of - NULL: none */
+static const node_t* text_set(const node_t* text, const node_t* n)
+{
+    for (const node_t* e = text; e != NULL; e = e->parent)
+    {
+        if (e->kind == NODE_ELEMENT && e->dynamic != NULL && e->dynamic->text != 0)
+            return e;
+        if (e == n)
+            break;
+    }
+    return NULL;
+}
+
+/*
+ * The text a script sets: one line of its variable, where its text starts
+ * (f: its first line; NULL - it has none: on its content box's first line).
+ * A block's is placed in its content box by text-align; an inline
+ * element's starts where it does.
+ */
+static void paint_text_var(painter_t* p, const node_t* block, const node_t* e, const frag_t* f)
+{
+    const style_t* st = e->style;
+    if (st == NULL || st->hidden || (st->color >> 24) == 0)
+        return;
+    dmvsi_var_info_t info;
+    if (dmvsi_var_info(p->c->doc, e->dynamic->text, &info) != 0)
+        return;
+    dmvsi_text_t t;
+    memset(&t, 0, sizeof(t));
+    t.var = e->dynamic->text;
+    t.text = info.text;
+    t.length = strlen(info.text);
+    t.chars = e->dynamic->chars;
+    t.font = (f != NULL) ? f->font : style_font(p->c, (style_t*)st);
+    t.paint.color = p->shadow ? times_alpha(p->shadow_color, st->color >> 24) : st->color;
+    if (t.font == NULL)
+        return;
+    if (e == block)
+    {
+        t.x = e->box.ax - p->ox + p->dx + e->box.b[3] + e->box.p[3];
+        t.width = e->box.w - e->box.b[1] - e->box.b[3] - e->box.p[1] - e->box.p[3];
+        t.align = (st->text_align == TEXT_CENTER) ? DMVSI_TEXT_CENTER : (st->text_align == TEXT_RIGHT) ? DMVSI_TEXT_RIGHT : DMVSI_TEXT_LEFT;
+    }
+    else
+        t.x = block->box.ax - p->ox + p->dx + ((f != NULL) ? f->x : 0);
+    if (f != NULL)
+        t.baseline = block->box.ay - p->oy + p->dy + f->y;
+    else
+        t.baseline = e->box.ay - p->oy + p->dy + e->box.b[0] + e->box.p[0] + text_baseline(p->c, (style_t*)st);
+    check(p, dmvsi_add_text(p->c->doc, &t));
+}
+
 /* The lines of text (and inline boxes) a block holds */
 static void paint_lines(painter_t* p, const node_t* n)
 {
+    const node_t* set_painted[8];
+    uint32_t set_count = 0;
     for (const frag_t* f = n->box.frags; f != NULL; f = f->next)
     {
         if (f->style->hidden)
             continue;
+        const node_t* set = (f->kind != FRAG_BOX) ? text_set(f->node, n) : NULL;
+        if (set != NULL)
+        {
+            /* A script's text: its variable, once */
+            bool done = false;
+            for (uint32_t i = 0; i < set_count && !done; i++)
+                done = set_painted[i] == set;
+            if (!done && set_count < 8u)
+            {
+                set_painted[set_count++] = set;
+                paint_text_var(p, n, set, f);
+            }
+            continue;
+        }
         if (f->kind == FRAG_BOX)
         {
             dmvsi_rect_t r = { n->box.ax - p->ox + p->dx + f->x, n->box.ay - p->oy + p->dy + f->y, f->w, f->h };
@@ -650,6 +718,8 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
     for (; layers != NULL && i < layers->count && layers->items[i].z < 0; i++)
         paint_context(p, layers->items[i].node, depth + 1U);
     paint_lines(p, n);
+    if (n->dynamic != NULL && n->dynamic->text != 0 && n->box.frags == NULL)
+        paint_text_var(p, n, n, NULL);          /* A script's text in what has none yet */
     paint_flow(p, n, depth + 1U);
     for (; layers != NULL && i < layers->count; i++)
         paint_context(p, layers->items[i].node, depth + 1U);
@@ -743,6 +813,8 @@ static void paint_flow_element(painter_t* p, node_t* k, uint32_t depth)
         else if (node_is(k, "svg"))
             paint_svg(p, k);
         paint_lines(p, k);
+        if (k->dynamic != NULL && k->dynamic->text != 0 && k->box.frags == NULL && k->style->display != DISPLAY_INLINE)
+            paint_text_var(p, k, k, NULL);      /* A script's text in what has none yet */
     }
     paint_flow(p, k, depth + 1U);
     end_dynamic(p, dynamic);
