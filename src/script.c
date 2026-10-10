@@ -1258,6 +1258,40 @@ static bool has_classes(const node_t* e, const char* spec)
     return true;
 }
 
+/*
+ * A look of an element (laid out in a state of the page) seen as the element
+ * is: hidden only where the element is - a screen hidden as the page is
+ * (visibility), shown by a change, is revealed in the page, not in its
+ * states (a row of its list would be painted unseen in its other look)
+ */
+static void unhide(node_t* n, uint32_t depth)
+{
+    if (n->style != NULL)
+        n->style->hidden = false;
+    for (node_t* k = n->first; k != NULL && depth < 200U; k = k->next)
+        if (k->kind == NODE_ELEMENT)
+            unhide(k, depth + 1U);
+}
+
+static void seen_like(node_t* look, const node_t* e, uint32_t depth)
+{
+    if (look == NULL || e == NULL || depth > 200U)
+        return;
+    if (look->style != NULL && e->style != NULL && !e->style->hidden)
+        look->style->hidden = false;
+    const node_t* g = e->first;
+    for (node_t* k = look->first; k != NULL; k = k->next)
+    {
+        if (g != NULL && g->kind == k->kind)
+        {
+            seen_like(k, g, depth + 1U);
+            g = g->next;
+        }
+        else if (k->kind == NODE_ELEMENT && look->style != NULL && !look->style->hidden)
+            unhide(k, depth + 1U);                  /* (none to follow: seen as its parent is) */
+    }
+}
+
 /* An element a change shows that is hidden (visibility) as the page is: shown, its opacity
  * what hides it - so that it can fade in. Its inside hidden as it is then */
 static void reveal(node_t* e, const node_t* f, uint32_t depth)
@@ -1376,6 +1410,8 @@ static int make_variants(script_t* sc, node_t* e, const change_t* toggled, bool 
         looks[n++] = (variant_t){ pressed, var, base, 1 };
     if (pressed != NULL && toggled != NULL)
         looks[n++] = (variant_t){ pressed_toggled, var, 1 - base, 1 };
+    for (uint8_t k = 1; k < n; k++)
+        seen_like(looks[k].node, e, 0);
     memcpy(d->variants, looks, n * sizeof(variant_t));
     d->variant_count = n;
     return 0;
@@ -1675,6 +1711,8 @@ static int lay_out_changes(script_t* sc)
         looks[n++] = (variant_t){ e->box.placed ? e : NULL, lv->var, 0, -1 };
         for (uint32_t k = 0; k < lv->count; k++)
             looks[n++] = (variant_t){ lv->looks[k], lv->var, (int32_t)(k + 1U), -1 };
+        for (uint8_t k = 1; k < n; k++)
+            seen_like(looks[k].node, e, 0);
         memcpy(e->dynamic->variants, looks, n * sizeof(variant_t));
         e->dynamic->variant_count = n;
     }

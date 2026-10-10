@@ -598,6 +598,19 @@ DMOD_TEST_STEP(dmvs_html_converts_texts_and_timers)
     dmvsi_free(doc);
 }
 
+static uint32_t count_texts(const dmvsi_node_t* n, const char* text)
+{
+    uint32_t count = 0;
+    for (; n != NULL; n = n->next)
+    {
+        if (n->kind == DMVSI_NODE_TEXT && n->u.text.var == 0 && strcmp(n->u.text.text, text) == 0)
+            count++;
+        if (n->kind == DMVSI_NODE_GROUP)
+            count += count_texts(n->first, text);
+    }
+    return count;
+}
+
 /* The groups clicked whose handler sets a variable */
 static uint32_t clicks_setting(dmvsi_doc_t doc, const dmvsi_node_t* n, dmvsi_var_t var)
 {
@@ -627,8 +640,9 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
         "<!DOCTYPE html><html><head><style>"
         "body { margin: 0; font-family: sans-serif } #screen { width: 200px; height: 120px }"
         ".row { height: 20px } .on { background: #36f } #title { height: 20px }"
-        "</style></head><body><div id=\"screen\"><div id=\"title\">-</div>"
-        "<div id=\"list\"><!-- the script's --></div></div><script>"
+        ".view { visibility: hidden; opacity: 0; transition: opacity 0.3s } .view.active { visibility: visible; opacity: 1 }"
+        "</style></head><body><div id=\"screen\"><div id=\"title\" onclick=\"document.getElementById('v').classList.add('active')\">-</div>"
+        "<div class=\"view\" id=\"v\"><div id=\"list\"><!-- the script's --></div></div></div><script>"
         "const songs = [{ t: 'One', s: 65 }, { t: 'Two', s: 130 }, { t: 'Three', s: 7 }];\n"
         "let current = 1;\n"
         "const list = document.getElementById('list');\n"
@@ -664,5 +678,7 @@ DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
     /* Rendered anew on a click: each row's class list one of two - its look's variable set */
     dmvsi_var_t look = var_named(doc, "div_look");
     DMOD_TEST_EXPECT_TRUE(look != 0 && clicks_setting(doc, root->first, look) == 3u);
+    /* The list is in a screen hidden as the page loads: a row's other look is seen when it is shown too */
+    DMOD_TEST_EXPECT_TRUE(count_texts(root->first, "Two") >= 2u);
     dmvsi_free(doc);
 }
