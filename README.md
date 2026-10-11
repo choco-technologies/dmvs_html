@@ -141,6 +141,16 @@ What's reported and left out:
 A class changes only the look of its element; what it moves around it
 stays.
 
+**Talking to the application.** A page is shown by an application on
+dmodOS; `dmod` (dmvs_js) is the channel between them -
+`dmod.prop()`, `get()`, `set()`, `onchange()`, `emit()`. One thing more is
+said in HTML: `data-dmod-width="name"` makes an element as wide as the
+integer property `name` says - its laid out width times the property over
+`data-dmod-scale` (1000: per mille; `data-dmod-value` its initial value when
+no script makes the property). What is in the element is painted at its
+whole width and cut at the property's end: a progress bar the application
+moves. In a browser the page's own `dmod.js` does it.
+
 ## Resources
 
 Style sheets, fonts and images are files next to the page; a URL is read
