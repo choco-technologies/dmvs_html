@@ -8,8 +8,10 @@ dmod_add_test(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     dmvs_html_test.c
 )
 
+# dmvs_js: dmvs_html needs it loaded to convert a page's scripts
 dmod_link_modules(${DMOD_MODULE_NAME}
     dmvsi@>=0.5
+    dmvs_js@>=0.1
 )
 
 target_compile_definitions(${DMOD_MODULE_NAME} PRIVATE
