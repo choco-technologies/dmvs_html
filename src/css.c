@@ -1095,6 +1095,23 @@ static void parse_sheet(conv_t* c, const char* s, const char* end, const char* b
                 parse_sheet(c, body, close, base, layer, depth);
             else if (ieq(name, n, "font-face"))
                 font_face(c, body, close, base);
+            else if (ieq(name, n, "keyframes") || ieq(name, n, "-webkit-keyframes"))
+            {
+                /* Its name and block, read when an element is animated by it */
+                const char* k = skip(s, stop);
+                const char* e = k;
+                while (e < stop && is_name_char(*e))
+                    e++;
+                keyframes_t* kf = arena_alloc(&c->arena, sizeof(keyframes_t));
+                if (kf != NULL && e > k)
+                {
+                    kf->name = arena_strndup(&c->arena, k, (size_t)(e - k));
+                    kf->body = body;
+                    kf->length = (size_t)(close - body);
+                    kf->next = c->keyframes;
+                    c->keyframes = kf;
+                }
+            }
             s = (close < end) ? close + 1 : end;
             continue;
         }

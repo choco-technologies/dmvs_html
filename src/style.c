@@ -1260,6 +1260,53 @@ static void transition_timings(style_t* st, const char* v)
 }
 
 /* transition: property duration [timing] [delay], ... */
+/* animation: name duration [timing] [delay] [infinite | n] [alternate | normal] ... (the first of a list) */
+static void animation_shorthand(conv_t* c, style_t* st, const char* v)
+{
+    static const int16_t ease[4] = { 250, 100, 250, 1000 };
+    const char* s = skip(v);
+    st->animation = NULL;
+    st->animation_ms = 0;
+    st->animation_infinite = false;
+    st->animation_alternate = false;
+    memcpy(st->animation_easing, ease, sizeof(ease));
+    if (word_is(s, "none"))
+        return;
+    bool has_time = false;
+    while (*s != '\0' && *s != ',')
+    {
+        s = skip(s);
+        if (*s == '\0' || *s == ',')
+            break;
+        uint16_t ms;
+        int16_t curve[4];
+        if (parse_time(&s, &ms))
+        {
+            if (!has_time)
+                st->animation_ms = ms;
+            has_time = true;
+            continue;
+        }
+        if (parse_timing(&s, curve))
+        {
+            memcpy(st->animation_easing, curve, sizeof(curve));
+            continue;
+        }
+        const char* start = s;
+        while (*s != '\0' && *s != ',' && !is_space(*s))
+            s++;
+        size_t n = (size_t)(s - start);
+        if (n == 8 && strncmp(start, "infinite", 8) == 0)
+            st->animation_infinite = true;
+        else if ((n == 9 && strncmp(start, "alternate", 9) == 0) || (n == 17 && strncmp(start, "alternate-reverse", 17) == 0))
+            st->animation_alternate = true;
+        else if (n > 0 && !((start[0] >= '0' && start[0] <= '9') || strncmp(start, "normal", n) == 0 ||
+                            strncmp(start, "forwards", n) == 0 || strncmp(start, "backwards", n) == 0 ||
+                            strncmp(start, "both", n) == 0 || strncmp(start, "running", n) == 0 || strncmp(start, "paused", n) == 0))
+            st->animation = arena_strndup(&c->arena, start, n);
+    }
+}
+
 static void transition_shorthand(style_t* st, const char* v)
 {
     static const int16_t ease[4] = { 250, 100, 250, 1000 };
@@ -2077,6 +2124,7 @@ static void apply(apply_t* a, const char* name, const char* v)
     }
     if (strcmp(name, "content") == 0) { parse_content(a, v); return; }
     if (strcmp(name, "transition") == 0) { transition_shorthand(st, v); return; }
+    if (strcmp(name, "animation") == 0) { animation_shorthand(a->c, st, v); return; }
     if (strcmp(name, "transition-property") == 0) { transition_properties(st, v); return; }
     if (strcmp(name, "transition-duration") == 0) { transition_durations(st, v); return; }
     if (strcmp(name, "transition-timing-function") == 0) { transition_timings(st, v); return; }

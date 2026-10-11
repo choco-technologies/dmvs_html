@@ -8,8 +8,10 @@ dmod_add_test(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
     dmvs_html_test.c
 )
 
+# dmvs_js: dmvs_html needs it loaded to convert a page's scripts
 dmod_link_modules(${DMOD_MODULE_NAME}
-    dmvsi@>=0.2
+    dmvsi@>=0.5
+    dmvs_js@>=0.1
 )
 
 target_compile_definitions(${DMOD_MODULE_NAME} PRIVATE
@@ -18,7 +20,8 @@ target_compile_definitions(${DMOD_MODULE_NAME} PRIVATE
 )
 
 # Register the test module with ctest - this replays the same two steps CI
-# runs: install the test module's dependencies with dmf-get, then execute it
+# runs: install the dependencies of the test module and of dmvs_html (the module
+# under test) with dmf-get, then execute it
 # through dmod_loader. The test's exit code equals its number of failed steps.
 find_program(DMF_GET_EXECUTABLE dmf-get HINTS ${DMOD_TOOLS_BIN_DIR} PATHS ENV PATH)
 find_program(DMOD_LOADER_EXECUTABLE dmod_loader HINTS ${DMOD_TOOLS_BIN_DIR} PATHS ENV PATH)
@@ -27,7 +30,7 @@ if(DMF_GET_EXECUTABLE AND DMOD_LOADER_EXECUTABLE)
     add_test(
         NAME ${DMOD_MODULE_NAME}
         COMMAND ${CMAKE_COMMAND} -E env DMOD_DMF_DIR=${DMOD_DMF_DIR}
-            bash -c "${DMF_GET_EXECUTABLE} install -d ${DMOD_DMF_DIR}/${DMOD_MODULE_NAME}-local.dmd -y && ${DMOD_LOADER_EXECUTABLE} ${DMOD_DMF_DIR}/${DMOD_MODULE_NAME}.dmf"
+            bash -c "${DMF_GET_EXECUTABLE} install -d ${DMOD_DMF_DIR}/${DMOD_MODULE_NAME}-local.dmd -y && ${DMF_GET_EXECUTABLE} install -d ${DMOD_DMF_DIR}/dmvs_html-local.dmd -y && ${DMOD_LOADER_EXECUTABLE} ${DMOD_DMF_DIR}/${DMOD_MODULE_NAME}.dmf"
     )
 else()
     message(WARNING "dmf-get/dmod_loader not found - 'ctest' will not run ${DMOD_MODULE_NAME}. Build the tools first with -DDMOD_BUILD_TOOLS=ON")

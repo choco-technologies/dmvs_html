@@ -11,8 +11,9 @@ makes a dmview view of it.
 It has its own HTML parser, CSS cascade and layout - no browser, no
 dependencies - so it runs on a PC at build time and on a device. It is made
 for **UI pages**: the screens a designer (or an AI) draws in HTML with
-Tailwind CSS - and the little JavaScript that switches between them, which
-it works out at conversion and makes the view's variables and handlers.
+Tailwind CSS - and their JavaScript, which
+[dmvs_js](https://github.com/choco-technologies/dmvs_js) compiles into the
+view's variables, handlers and timers.
 
 ## What it does
 
@@ -70,52 +71,75 @@ CSS does; text is measured with them as the view will draw it. Icon fonts
 
 ## Scripts
 
-A script is not run on the device: what its click handlers do is worked
-out at conversion. Understood is what switches screens and toggles things:
+A script isn't run on the device. The page's `<script>`s and `onclick`
+code are compiled by [dmvs_js](https://github.com/choco-technologies/dmvs_js)
+into the view's code:
+
+- what the scripts do when they load becomes the init handler;
+- listeners become click handlers;
+- `setTimeout` / `setInterval` become the view's timers;
+- variables become the view's variables.
+
+Anything known at conversion is computed then. See dmvs_js's
+`docs/compiler.md` for the language it compiles. dmvs_html is its host, the
+DOM:
 
 ```js
-const home = document.getElementById('home');   // an element
-let current = null;                              // a variable the handlers set: the view's
-function open(id) {                              // onclick="open('settings')": inlined
+const home = document.getElementById('home');   // an element (querySelector / querySelectorAll too)
+let current = null;                              // a variable holding elements
+function open(id) {                              // onclick="open('settings')"
     const w = document.getElementById(id);
-    w.classList.add('active');                   // classList.add / remove / toggle
-    home.style.opacity = '0.3';                  // style.<property> = ...
+    w.classList.add('active');                   // classList.add / remove / toggle / replace / contains
+    home.style.opacity = '0.3';                  // style.<property> = a text known at conversion
     current = w;
 }
-function close() {
-    if (current) {                               // if (x), (!x), (a === b), classList.contains()
-        current.classList.remove('active');
-        home.style.opacity = '1';
-        current = null;
-    }
-}
+const speed = document.getElementById('speed');
+let kmh = 0;
+const timer = setInterval(() => {                // a timer of the view
+    kmh += 2;
+    if (kmh >= 68) clearInterval(timer);
+    speed.innerText = kmh + ' km/h';             // a text variable
+}, 35);
+up.addEventListener('click', () =>               // parseFloat(innerText): the number it shows
+    temp.innerText = (parseFloat(temp.innerText) + 0.5).toFixed(1) + '°C');
 ```
 
-Handlers are also what the page sets up when it loads:
-`addEventListener('click', ...)` and `el.onclick = ...` with arrow and
-function expressions (closures over their scope), on elements of
-`getElementById()`, `querySelector()` / `querySelectorAll()` (a list's
-`forEach()` is unrolled), `getAttribute()`; `el.click()` runs the
-element's handlers. Several class changes of an element at once are one
-look of it.
+- **Changes are laid out.** A change of a class or a style gives the page
+  with that change. How the element **moves and fades** becomes its
+  group's variables, set at once or **animated by its CSS `transition`**.
+  When it **looks different** it is painted in each state, shown on the
+  class's variable. Classes an element changes together are one look.
+  `:active` is its **pressed look**. The code calls a handler of each
+  change, made once every change is known.
+- **Element variables.** A variable holding elements
+  (`current.classList.remove(...)`) changes whichever element it holds, an
+  `IF` for each element it may hold.
+- **Texts.** A text a script sets (`innerText`, `textContent`) is a text
+  variable of 64 bytes. It is drawn on its element's first line, placed by
+  `text-align`, with every character the scripts contain. Its number
+  shadows it, so `parseFloat(el.innerText)` works.
+- **Clicks.** `addEventListener('click', ...)`, `el.onclick = ...` and
+  `onclick="..."` are a click handler. `this` is the element, and
+  `el.click()` runs its handlers.
 
-`this` in an `onclick` is its element. Every change is laid out - the page
-with that class or that style:
+- **What scripts build as the page loads** (`createElement`, `className`,
+  `innerHTML` with markup, `appendChild`; a list rendered from an array)
+  is part of the page. dmvs_js evaluates the loading as a browser runs
+  it, the elements are laid out with the page, and their listeners are
+  clicks (`div.onclick = () => play(i)`). A list rebuilt later stays as
+  it was when the page loaded.
+- `innerHTML` set to text (`'22.0&deg;'`) is the element's text.
 
-- how the element **moves and fades** becomes its group's variables, set at
-  once or **animated by its CSS `transition`** (duration and timing
-  function) - the view switches its screens as the page does, and slides
-  them as it does;
-- when it **looks different** (a switch on, a light off, play / pause, an
-  icon hidden, another label) it is painted in each state of its class,
-  shown on the class's variable;
-- `:active` (and Tailwind's `active:`) is its **pressed look**, shown while
-  its box is pressed.
+What's reported and left out:
+- elements made or replaced later, while the view runs;
+- `src`, `setAttribute`;
+- a style known only at runtime;
+- a style that changes how an element looks (other than its opacity);
+- events other than clicks;
+- `Date`.
 
-What is reported and left out: what the page does when it loads (timers,
-`Date`, text a script writes), loops, events other than clicks, a style a
-script sets that changes how an element looks (but its opacity). A class
-changes only the look of its element - what it moves around it stays.
+A class changes only the look of its element; what it moves around it
+stays.
 
 ## Resources
 

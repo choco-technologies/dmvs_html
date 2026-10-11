@@ -38,5 +38,7 @@ jobs:
       - name: Run tests with dmod_loader
         run: |
           export DMOD_DMF_DIR=$(pwd)/build/dmf
+          # The test's own dependencies, and dmvs_html's (dmvs_js: the test does not call it, the module does)
           dmf-get install -d ${DMOD_DMF_DIR}/test_dmvs_html-local.dmd -y
+          dmf-get install -d ${DMOD_DMF_DIR}/dmvs_html-local.dmd -y
           dmod_loader build/dmf/test_dmvs_html.dmf
