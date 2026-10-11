@@ -1125,7 +1125,7 @@ static bool has_class(const node_t* n, const char* name)
 }
 
 /* The states laid out, kept for painting their looks (c->states) */
-#define MAX_STATES      48u
+#define MAX_STATES      96u
 
 typedef struct
 {
@@ -1831,6 +1831,86 @@ static void texts(script_t* sc, node_t* n, uint32_t depth)
     }
 }
 
+/*
+ * data-dmod-width="name": the element's width follows the property `name`
+ * of the view (dmod.prop(), or made here) - the width it is laid out at
+ * times the property over data-dmod-scale (1000: per mille). What is in it
+ * is painted at its whole width and cut where the property puts its end
+ * (a progress bar). The application that shows the view sets the property.
+ */
+
+/* The integer property `name`: one the scripts made, else a new one at `initial` */
+static dmvsi_var_t prop_var(conv_t* c, const char* name, int32_t initial)
+{
+    dmvsi_var_info_t info;
+    for (dmvsi_var_t v = 1; dmvsi_var_info(c->doc, v, &info) == 0; v++)
+    {
+        const char* prop = dmvsi_var_prop(c->doc, v);
+        if (prop != NULL && strcmp(prop, name) == 0)
+            return (info.kind == DMVSI_VAR_INT) ? v : 0;
+    }
+    dmvsi_var_t v = dmvsi_add_var(c->doc, name, initial);
+    if (v != 0 && dmvsi_set_prop(c->doc, v, name) != 0)
+        return 0;
+    return v;
+}
+
+static int32_t attr_number(const node_t* e, const char* name, int32_t otherwise)
+{
+    const char* a = node_attr(e, name);
+    if (a == NULL || *a == '\0')
+        return otherwise;
+    int32_t v = 0;
+    bool negative = *a == '-';
+    for (a += negative ? 1 : 0; *a >= '0' && *a <= '9'; a++)
+        v = v * 10 + (*a - '0');
+    return negative ? -v : v;
+}
+
+static int bind_widths(conv_t* c, node_t* n, uint32_t depth)
+{
+    for (node_t* e = n->first; e != NULL && depth < 200U; e = e->next)
+    {
+        if (e->kind != NODE_ELEMENT)
+            continue;
+        const char* name = node_attr(e, "data-dmod-width");
+        if (name != NULL && *name != '\0' && e->box.placed)
+        {
+            int32_t scale = attr_number(e, "data-dmod-scale", 1000);
+            int32_t w = e->box.w / DMVSI_UNIT;
+            dmvsi_var_t prop = prop_var(c, name, attr_number(e, "data-dmod-value", 0));
+            dmvsi_var_info_t info;
+            if (prop == 0 || scale <= 0 || dmvsi_var_info(c->doc, prop, &info) != 0)
+            {
+                WARN(c, "data-dmod-width of #%s: \"%s\" is no integer property - not converted\n", label_of(e), name);
+                continue;
+            }
+            if (e->dynamic == NULL && (e->dynamic = arena_alloc(&c->arena, sizeof(dynamic_t))) == NULL)
+                return -ENOMEM;
+            char label[48];
+            Dmod_SnPrintf(label, sizeof(label), "%s_w", label_of(e));
+            int64_t now = (int64_t)info.initial * w / scale;
+            dmvsi_var_t px = dmvsi_add_var(c->doc, label, (int32_t)((now < 0) ? 0 : (now > w) ? w : now));
+            /* On a change: px = clamp(prop, 0, scale) * w / scale */
+            dmvsi_action_t a[5];
+            memset(a, 0, sizeof(a));
+            a[0].kind = DMVSI_ACT_SET; a[0].var = px; a[0].operand = prop;
+            a[1].kind = DMVSI_ACT_MAX; a[1].var = px; a[1].value = 0;
+            a[2].kind = DMVSI_ACT_MIN; a[2].var = px; a[2].value = scale;
+            a[3].kind = DMVSI_ACT_MUL; a[3].var = px; a[3].value = w;
+            a[4].kind = DMVSI_ACT_DIV; a[4].var = px; a[4].value = scale;
+            dmvsi_handler_t h = (px != 0) ? dmvsi_add_handler(c->doc, a, 5) : 0;
+            if (h == 0 || dmvsi_on_change(c->doc, prop, h) != 0)
+                return -ENOMEM;
+            e->dynamic->bind[DMVSI_BIND_W] = px;
+        }
+        int ret = bind_widths(c, e, depth + 1U);
+        if (ret != 0)
+            return ret;
+    }
+    return 0;
+}
+
 int script_compile(conv_t* c)
 {
     script_t* sc = Dmod_Malloc(sizeof(*sc));
@@ -1847,7 +1927,10 @@ int script_compile(conv_t* c)
     find_scripts(sc, c->document, programs, 0);
     int status = 0;
     if (programs->count == 0)
+    {
+        status = bind_widths(c, c->document, 0);     /* (no scripts: only what the application sets) */
         goto done;
+    }
 
     dmvs_js_host_t host;
     memset(&host, 0, sizeof(host));
@@ -1891,6 +1974,8 @@ int script_compile(conv_t* c)
         status = expand_held(sc);
     if (status == 0)
         status = lay_out_changes(sc);
+    if (status == 0)
+        status = bind_widths(c, c->document, 0);
     if (status == 0)
         status = make_src_variants(sc);
     if (status == 0)

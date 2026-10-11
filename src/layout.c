@@ -701,10 +701,14 @@ static int32_t place_line(conv_t* c, node_t* block, item_t* items, uint32_t from
 static int32_t layout_inline(conv_t* c, node_t* block, node_t* first, node_t* stop, int32_t x0, int32_t y0, int32_t avail,
                              int32_t cb_h, bool* first_baseline_set)
 {
-    item_t* storage = arena_alloc(&c->arena, MAX_ITEMS * sizeof(item_t));
+    /* (on the heap, not the arena: a page lays out its inline content many times - flex measures) */
+    item_t* storage = Dmod_Malloc(MAX_ITEMS * sizeof(item_t));
     items_t it = { c, storage, 0, true };
     if (storage == NULL)
+    {
+        c->arena.failed = true;
         return 0;
+    }
     /* The children from `first` up to `stop`, as if they were all of a parent */
     node_t holder;
     memset(&holder, 0, sizeof(holder));
@@ -741,6 +745,7 @@ static int32_t layout_inline(conv_t* c, node_t* block, node_t* first, node_t* st
                 it.items[i].node->box.container = block;
             }
         }
+        Dmod_Free(storage);
         return 0;
     }
 
@@ -784,6 +789,7 @@ static int32_t layout_inline(conv_t* c, node_t* block, node_t* first, node_t* st
         if (end == it.count)
             break;
     }
+    Dmod_Free(storage);
     return y - y0;
 }
 
@@ -868,10 +874,13 @@ static bool replaced_size(conv_t* c, node_t* n, int32_t* w, int32_t* h)
 
 static int32_t intrinsic_items(conv_t* c, node_t* n, bool max_content)
 {
-    item_t* storage = arena_alloc(&c->arena, MAX_ITEMS * sizeof(item_t));
+    item_t* storage = Dmod_Malloc(MAX_ITEMS * sizeof(item_t));     /* (on the heap: see layout_inline()) */
     items_t it = { c, storage, 0, true };
     if (storage == NULL)
+    {
+        c->arena.failed = true;
         return 0;
+    }
     inline_items(&it, n, 0, AUTO_SIZE, true, max_content, 0);
     int32_t best = 0, line = 0, word = 0;
     for (uint32_t i = 0; i < it.count; i++)
@@ -899,6 +908,7 @@ static int32_t intrinsic_items(conv_t* c, node_t* n, bool max_content)
             word = 0;
         }
     }
+    Dmod_Free(storage);
     return max32(best, max_content ? line : word);
 }
 
@@ -1087,10 +1097,13 @@ static int32_t layout_flex(conv_t* c, node_t* n, int32_t x0, int32_t y0, int32_t
     int32_t main_avail = row ? cw : ch;
     len_t gap_len = row ? st->column_gap : st->row_gap;
     int32_t gap = (gap_len.kind == LEN_SET) ? len_resolve(gap_len, max32(main_avail, 0)) : 0;
-    flex_item_t* items = arena_alloc(&c->arena, MAX_FLEX * sizeof(flex_item_t));
+    flex_item_t* items = Dmod_Malloc(MAX_FLEX * sizeof(flex_item_t));     /* (on the heap: see layout_inline()) */
     uint32_t count = 0;
     if (items == NULL)
+    {
+        c->arena.failed = true;
         return 0;
+    }
 
     for (node_t* k = n->first; k != NULL; k = k->next)
     {
@@ -1334,6 +1347,7 @@ static int32_t layout_flex(conv_t* c, node_t* n, int32_t x0, int32_t y0, int32_t
             baseline_set = true;
         }
     }
+    Dmod_Free(items);
     if (row)
         return (ch != AUTO_SIZE) ? ch : line_cross;
     return (ch != AUTO_SIZE) ? ch : used;
