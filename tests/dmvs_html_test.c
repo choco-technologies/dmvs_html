@@ -693,6 +693,26 @@ DMOD_TEST_STEP(dmvs_html_converts_a_list_on_a_hidden_screen)
         DMOD_TEST_EXPECT_TRUE(r != NULL && r->bind[DMVSI_BIND_OPACITY] != 0);
         DMOD_TEST_EXPECT_TRUE(r != NULL && var_initial(doc, r->bind[DMVSI_BIND_OPACITY]) == 255);
     }
+
+    /* Picking a row changes no row's opacity: row-active does not fade, invisible does */
+    const dmvsi_node_t* r1 = group_named(root->first, "row-1");
+    if (r1 != NULL && r1->click != 0)
+    {
+        const dmvsi_action_t* acts = NULL;
+        uint32_t n = flat_actions(doc, r1->click, &acts);
+        uint32_t fades = 0;
+        for (uint32_t i = 0; i < n; i++)
+        {
+            for (uint32_t k = 0; k < 3U; k++)
+            {
+                const dmvsi_node_t* r = group_named(root->first, rows[k]);
+                if (r != NULL && acts[i].var == r->bind[DMVSI_BIND_OPACITY] &&
+                    (acts[i].kind == DMVSI_ACT_SET || acts[i].kind == DMVSI_ACT_ANIMATE))
+                    fades++;
+            }
+        }
+        DMOD_TEST_EXPECT_EQ(fades, 0u);
+    }
     dmvsi_free(doc);
 }
 

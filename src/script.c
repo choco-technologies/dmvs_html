@@ -1516,6 +1516,28 @@ static void put_to(script_t* sc, dmvsi_var_t var, int32_t value, uint16_t ms, co
     }
 }
 
+/*
+ * What a class does to an element: whether adding or removing it (any of
+ * its changes) moves it or fades it. A change of a class puts only that -
+ * an element's classes are changed independently (the playing row of a
+ * list, a row hidden as the list is shorter), and one that does not fade
+ * it must not undo the opacity another put.
+ */
+static void class_effects(script_t* sc, const change_t* ch, bool* moves_x, bool* moves_y, bool* fades)
+{
+    *moves_x = *moves_y = *fades = false;
+    for (uint32_t i = 0; i < sc->change_count; i++)
+    {
+        const change_t* k = &sc->changes[i];
+        if (k->element != ch->element || k->changed || !k->laid_out ||
+            (k->mod.kind != MOD_CLASS_ADD && k->mod.kind != MOD_CLASS_REMOVE) || strcmp(k->mod.name, ch->mod.name) != 0)
+            continue;
+        *moves_x = *moves_x || k->dx != 0;
+        *moves_y = *moves_y || k->dy != 0;
+        *fades = *fades || k->opacity != own_opacity(k->element->style);
+    }
+}
+
 /* The actions of a change of one element: its variables to where the change puts it */
 static void apply(script_t* sc, node_t* e, uint8_t kind, const char* name, const char* value)
 {
@@ -1541,11 +1563,14 @@ static void apply(script_t* sc, node_t* e, uint8_t kind, const char* name, const
     int32_t ox, oy;
     view_origin(sc->c, &ox, &oy);
     dmvsi_rect_t r = group_rect(sc->c, e, ox, oy);
-    if (e->dynamic->bind[DMVSI_BIND_X] != 0)
+    bool moves_x = true, moves_y = true, fades = true;
+    if (kind == MOD_CLASS_ADD || kind == MOD_CLASS_REMOVE)
+        class_effects(sc, ch, &moves_x, &moves_y, &fades);
+    if (e->dynamic->bind[DMVSI_BIND_X] != 0 && moves_x)
         put_to(sc, e->dynamic->bind[DMVSI_BIND_X], r.x + ch->dx, ch->move_ms, ch->move_easing);
-    if (e->dynamic->bind[DMVSI_BIND_Y] != 0)
+    if (e->dynamic->bind[DMVSI_BIND_Y] != 0 && moves_y)
         put_to(sc, e->dynamic->bind[DMVSI_BIND_Y], r.y + ch->dy, ch->move_ms, ch->move_easing);
-    if (e->dynamic->bind[DMVSI_BIND_OPACITY] != 0)
+    if (e->dynamic->bind[DMVSI_BIND_OPACITY] != 0 && fades)
         put_to(sc, e->dynamic->bind[DMVSI_BIND_OPACITY], ch->opacity, ch->fade_ms, ch->fade_easing);
 }
 
