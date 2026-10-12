@@ -498,11 +498,25 @@ static void paint_decoration(painter_t* p, const style_t* st, dmvsi_rect_t r, co
 }
 
 /* The element (n or inside it) whose text a script sets that a text is of - NULL: none */
+/*
+ * The text a script sets in an element: its own variable, or - the element
+ * as it looks in another state (a class a script changes) - the variable of
+ * the element it is a look of: what the script set shows in every look.
+ */
+static const dynamic_t* text_dynamic(const node_t* e)
+{
+    if (e->dynamic != NULL && e->dynamic->text != 0)
+        return e->dynamic;
+    if (e->like != NULL && e->like->dynamic != NULL && e->like->dynamic->text != 0)
+        return e->like->dynamic;
+    return NULL;
+}
+
 static const node_t* text_set(const node_t* text, const node_t* n)
 {
     for (const node_t* e = text; e != NULL; e = e->parent)
     {
-        if (e->kind == NODE_ELEMENT && e->dynamic != NULL && e->dynamic->text != 0)
+        if (e->kind == NODE_ELEMENT && text_dynamic(e) != NULL)
             return e;
         if (e == n)
             break;
@@ -521,15 +535,16 @@ static void paint_text_var(painter_t* p, const node_t* block, const node_t* e, c
     const style_t* st = e->style;
     if (st == NULL || st->hidden || (st->color >> 24) == 0)
         return;
+    const dynamic_t* d = text_dynamic(e);
     dmvsi_var_info_t info;
-    if (dmvsi_var_info(p->c->doc, e->dynamic->text, &info) != 0)
+    if (d == NULL || dmvsi_var_info(p->c->doc, d->text, &info) != 0)
         return;
     dmvsi_text_t t;
     memset(&t, 0, sizeof(t));
-    t.var = e->dynamic->text;
+    t.var = d->text;
     t.text = info.text;
     t.length = strlen(info.text);
-    t.chars = e->dynamic->chars;
+    t.chars = d->chars;
     t.font = (f != NULL) ? f->font : style_font(p->c, (style_t*)st);
     t.paint.color = p->shadow ? times_alpha(p->shadow_color, st->color >> 24) : st->color;
     if (t.font == NULL)
@@ -804,7 +819,7 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
     for (; layers != NULL && i < layers->count && layers->items[i].z < 0; i++)
         paint_context(p, layers->items[i].node, depth + 1U);
     paint_lines(p, n);
-    if (n->dynamic != NULL && n->dynamic->text != 0 && n->box.frags == NULL)
+    if (text_dynamic(n) != NULL && n->box.frags == NULL)
         paint_text_var(p, n, n, NULL);          /* A script's text in what has none yet */
     paint_flow(p, n, depth + 1U);
     for (; layers != NULL && i < layers->count; i++)
@@ -899,7 +914,7 @@ static void paint_flow_element(painter_t* p, node_t* k, uint32_t depth)
         else if (node_is(k, "svg"))
             paint_svg(p, k);
         paint_lines(p, k);
-        if (k->dynamic != NULL && k->dynamic->text != 0 && k->box.frags == NULL && k->style->display != DISPLAY_INLINE)
+        if (text_dynamic(k) != NULL && k->box.frags == NULL && k->style->display != DISPLAY_INLINE)
             paint_text_var(p, k, k, NULL);      /* A script's text in what has none yet */
     }
     paint_flow(p, k, depth + 1U);

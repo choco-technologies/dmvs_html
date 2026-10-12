@@ -1717,7 +1717,12 @@ static void apply(apply_t* a, const char* name, const char* v)
         return;
     }
     if (strcmp(name, "box-sizing") == 0) { st->border_box = word_is(s, "border-box"); return; }
-    if (strcmp(name, "visibility") == 0) { st->hidden = inherit ? pa->hidden : !word_is(s, "visible"); return; }
+    if (strcmp(name, "visibility") == 0)
+    {
+        st->hidden = inherit ? pa->hidden : !word_is(s, "visible");
+        st->visibility = inherit ? VISIBILITY_INHERITED : st->hidden ? VISIBILITY_HIDDEN : VISIBILITY_VISIBLE;
+        return;
+    }
     if (strcmp(name, "z-index") == 0)
     {
         int64_t n;

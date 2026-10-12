@@ -103,6 +103,11 @@ typedef struct
     bool        placed;                             /* Its absolute position is known */
 } box_t;
 
+/* style_t::visibility: what the element's own style says (inherited: its parent's hidden) */
+#define VISIBILITY_INHERITED    0u
+#define VISIBILITY_VISIBLE      1u
+#define VISIBILITY_HIDDEN       2u
+
 /* One look of an element: the element as laid out in a state of the page, shown on its conditions */
 #define MAX_VARIANTS        8u
 
@@ -131,6 +136,8 @@ struct node
     uint8_t     kind;
     uint32_t    index;                              /* Of the elements, in document order (as parsed) */
     dynamic_t*  dynamic;                            /* NULL: what it is it stays */
+    const struct node* like;                        /* A look of an element (its tree in a state): that element -
+                                                       the text a script sets in it is the element's */
     bool        active;                             /* Pressed: :active holds (MOD_ACTIVE) */
     uint8_t     pseudo;
     char*       tag;                                /* Lowercase; NULL for text */
@@ -361,6 +368,7 @@ struct style
     uint8_t     overflow_x, overflow_y;
     bool        border_box;                         /* box-sizing */
     bool        hidden;                             /* visibility */
+    uint8_t     visibility;                         /* ... as the element's own style gives it: VISIBILITY_* */
     len_t       inset[4];                           /* top, right, bottom, left */
     int32_t     z_index;
     bool        z_auto;
