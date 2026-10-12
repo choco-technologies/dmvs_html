@@ -633,6 +633,69 @@ static uint32_t clicks_setting(dmvsi_doc_t doc, const dmvsi_node_t* n, dmvsi_var
     return count;
 }
 
+/*
+ * A list on a screen hidden as the page is: the texts a script sets show in
+ * every look of a row (a class it changes), and a row hidden by its own class
+ * is faded in and out by it - not as hidden all the time as its screen is.
+ */
+DMOD_TEST_STEP(dmvs_html_converts_a_list_on_a_hidden_screen)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("list.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { width: 200px; height: 100px; position: relative }"
+        "#nav { width: 20px; height: 20px; background: #333 }"
+        ".view { position: absolute; left: 20px; top: 0; width: 180px; height: 100px; visibility: hidden }"
+        ".view.active { visibility: visible }"
+        ".row { height: 20px; color: #fff } .row-active { color: #f0f } .invisible { visibility: hidden }"
+        "</style></head><body><div id=\"screen\"><div id=\"nav\"></div><div id=\"list\" class=\"view\">"
+        "<div id=\"row-0\" class=\"row row-active\"><div id=\"t-0\">Demo A</div></div>"
+        "<div id=\"row-1\" class=\"row\"><div id=\"t-1\">Demo B</div></div>"
+        "<div id=\"row-2\" class=\"row\"><div id=\"t-2\">Demo C</div></div>"
+        "</div></div><script>\n"
+        "let count = 3;\n"
+        "const names = ['First', 'Second', 'Third'];\n"
+        "function show() {\n"
+        "  count = count - 1;\n"
+        "  for (let i = 0; i < 3; i++) {\n"
+        "    document.getElementById('t-' + i).innerText = names[i];\n"
+        "    const row = document.getElementById('row-' + i);\n"
+        "    if (i < count) row.classList.remove('invisible'); else row.classList.add('invisible');\n"
+        "  }\n"
+        "}\n"
+        "function pick(t) {\n"
+        "  for (let i = 0; i < 3; i++) {\n"
+        "    const row = document.getElementById('row-' + i);\n"
+        "    if (i === t) row.classList.add('row-active'); else row.classList.remove('row-active');\n"
+        "  }\n"
+        "}\n"
+        "document.getElementById('nav').addEventListener('click', () => document.getElementById('list').classList.add('active'));\n"
+        "document.getElementById('row-0').addEventListener('click', () => show());\n"
+        "document.getElementById('row-1').addEventListener('click', () => pick(1));\n"
+        "document.getElementById('row-2').addEventListener('click', () => pick(2));\n"
+        "</script></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("list.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    const dmvsi_node_t* root = dmvsi_root(doc);
+
+    /* No look of a row shows the text the page had before the script set its own */
+    DMOD_TEST_EXPECT_EQ(count_texts(root, "Demo A"), 0u);
+    DMOD_TEST_EXPECT_EQ(count_texts(root, "Demo B"), 0u);
+    DMOD_TEST_EXPECT_EQ(count_texts(root, "Demo C"), 0u);
+
+    /* Each row is faded by its opacity's variable, shown as the page has it */
+    static const char rows[3][8] = { "row-0", "row-1", "row-2" };
+    for (uint32_t i = 0; i < 3U; i++)
+    {
+        const dmvsi_node_t* r = group_named(root->first, rows[i]);
+        DMOD_TEST_EXPECT_TRUE(r != NULL && r->bind[DMVSI_BIND_OPACITY] != 0);
+        DMOD_TEST_EXPECT_TRUE(r != NULL && var_initial(doc, r->bind[DMVSI_BIND_OPACITY]) == 255);
+    }
+    dmvsi_free(doc);
+}
+
 DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
 {
     int status = -1;

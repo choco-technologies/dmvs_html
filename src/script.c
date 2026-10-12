@@ -1228,10 +1228,16 @@ static uint32_t look_of(const node_t* e)
     return inside(e, e, h, 0);
 }
 
-/* How opaque an element is seen: not at all while it is hidden (visibility) */
-static int32_t seen_opacity(const style_t* st)
+/*
+ * How opaque an element makes itself: hidden by its own visibility, not by
+ * a box around it - what a change of its classes can change. A row of a
+ * list on a screen hidden as the page is (its screen shows it later) is
+ * shown or hidden by its own class all the same.
+ */
+static int32_t own_opacity(const style_t* st)
 {
-    return st->hidden ? 0 : st->opacity;
+    bool hidden = (st->visibility == VISIBILITY_INHERITED) ? false : st->visibility == VISIBILITY_HIDDEN;
+    return hidden ? 0 : st->opacity;
 }
 
 /* "+a -b": whether the element has all that already */
@@ -1279,6 +1285,8 @@ static void seen_like(node_t* look, const node_t* e, uint32_t depth)
         return;
     if (look->style != NULL && e->style != NULL && !e->style->hidden)
         look->style->hidden = false;
+    if (look != e)
+        look->like = e;
     const node_t* g = e->first;
     for (node_t* k = look->first; k != NULL; k = k->next)
     {
@@ -1293,7 +1301,9 @@ static void seen_like(node_t* look, const node_t* e, uint32_t depth)
 }
 
 /* An element a change shows that is hidden (visibility) as the page is: shown, its opacity
- * what hides it - so that it can fade in. Its inside hidden as it is then */
+ * what hides it - so that it can fade in. Its inside hidden as it is then: by its own
+ * visibility, or inheriting it - not by the boxes around the element (a screen hidden as
+ * the page is shows it later) */
 static void reveal(node_t* e, const node_t* f, uint32_t depth)
 {
     if (e->style != NULL && f->style != NULL && e->kind == NODE_ELEMENT && depth == 0)
@@ -1305,7 +1315,9 @@ static void reveal(node_t* e, const node_t* f, uint32_t depth)
             break;
         if (k->kind == NODE_ELEMENT && k->style != NULL && g->style != NULL)
         {
-            if (k->style->hidden && !g->style->hidden)
+            bool hidden = (g->style->visibility == VISIBILITY_INHERITED) ? e->style->hidden
+                                                                         : g->style->visibility == VISIBILITY_HIDDEN;
+            if (k->style->hidden && !hidden)
                 k->style->hidden = false;
             reveal(k, g, depth + 1U);
         }
@@ -1319,7 +1331,7 @@ static int lay_out_change(script_t* sc, change_t* ch)
     conv_t* c = sc->c;
     node_t* e = ch->element;
     ch->laid_out = true;
-    ch->opacity = seen_opacity(e->style);
+    ch->opacity = own_opacity(e->style);
     const style_t* after = e->style;           /* The style it has then: its transition */
     if ((ch->mod.kind == MOD_CLASS_ADD && has_class(e, ch->mod.name)) ||
         (ch->mod.kind == MOD_CLASS_REMOVE && !has_class(e, ch->mod.name)) ||
@@ -1346,9 +1358,10 @@ static int lay_out_change(script_t* sc, change_t* ch)
             view_origin(s, &sx, &sy);
             ch->dx = (f->box.ax - sx) - (e->box.ax - ox);
             ch->dy = (f->box.ay - sy) - (e->box.ay - oy);
-            ch->opacity = seen_opacity(f->style);
-            if (e->style->hidden && !f->style->hidden)
-                ch->reveals = f;
+            ch->opacity = own_opacity(f->style);
+            if (e->style->hidden && (!f->style->hidden || (e->style->visibility == VISIBILITY_HIDDEN &&
+                                                           f->style->visibility != VISIBILITY_HIDDEN)))
+                ch->reveals = f;                /* (hidden by itself, or hidden no more) */
             if (look_of(f) != look_of(e) || !e->box.placed)
             {
                 ch->changed = true;             /* Another look */
@@ -1428,7 +1441,7 @@ static int bind_element(script_t* sc, node_t* e)
             continue;
         moves_x = moves_x || ch->dx != 0;
         moves_y = moves_y || ch->dy != 0;
-        fades = fades || ch->opacity != seen_opacity(e->style);
+        fades = fades || ch->opacity != own_opacity(e->style);
     }
     if (!moves_x && !moves_y && !fades)
         return 0;
@@ -1452,7 +1465,7 @@ static int bind_element(script_t* sc, node_t* e)
     if (fades)
     {
         Dmod_SnPrintf(name, sizeof(name), "%s_alpha", base);
-        e->dynamic->bind[DMVSI_BIND_OPACITY] = dmvsi_add_var(sc->c->doc, name, seen_opacity(e->style));
+        e->dynamic->bind[DMVSI_BIND_OPACITY] = dmvsi_add_var(sc->c->doc, name, own_opacity(e->style));
     }
     return 0;
 }
