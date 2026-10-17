@@ -10,7 +10,7 @@ dmod_add_test(${DMOD_MODULE_NAME} ${DMOD_MODULE_VERSION}
 
 # dmvs_js: dmvs_html needs it loaded to convert a page's scripts
 dmod_link_modules(${DMOD_MODULE_NAME}
-    dmvsi@>=0.6.1
+    dmvsi
     dmvs_js@>=0.1
 )
 
