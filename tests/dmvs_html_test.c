@@ -716,6 +716,71 @@ DMOD_TEST_STEP(dmvs_html_converts_a_list_on_a_hidden_screen)
     dmvsi_free(doc);
 }
 
+/* The group of a name that scrolls */
+static const dmvsi_node_t* scroller_named(const dmvsi_node_t* n, const char* name)
+{
+    for (; n != NULL; n = n->next)
+    {
+        if (n->kind != DMVSI_NODE_GROUP)
+            continue;
+        if (n->u.group.name != NULL && strcmp(n->u.group.name, name) == 0 && n->u.group.scroll_h != 0)
+            return n;
+        const dmvsi_node_t* f = scroller_named(n->first, name);
+        if (f != NULL)
+            return f;
+    }
+    return NULL;
+}
+
+/* A list that loads more where it ends: its scroll listener, scrollTop read and set, the layout's heights */
+DMOD_TEST_STEP(dmvs_html_converts_scrolling)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("scroll.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { width: 100px; height: 100px }"
+        "#list { height: 40px; overflow-y: auto } .row { height: 20px; background: #333 }"
+        "</style></head><body><div id=\"screen\"><div id=\"list\">"
+        "<div class=\"row\" id=\"r0\"></div><div class=\"row\" id=\"r1\"></div><div class=\"row\" id=\"r2\"></div>"
+        "<div class=\"row\" id=\"r3\"></div><div class=\"row\" id=\"r4\"></div>"
+        "</div></div><script>\n"
+        "const list = document.getElementById('list');\n"
+        "const pitch = document.getElementById('r1').offsetTop - document.getElementById('r0').offsetTop;\n"
+        "let first = 0;\n"
+        "list.addEventListener('scroll', () => {\n"
+        "  if (list.scrollTop + list.clientHeight >= list.scrollHeight - 4) {\n"
+        "    first = first + 1;\n"
+        "    list.scrollTop -= pitch;\n"
+        "  }\n"
+        "});\n"
+        "</script></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("scroll.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+
+    const dmvsi_node_t* list = scroller_named(dmvsi_root(doc), "list");
+    DMOD_TEST_EXPECT_TRUE(list != NULL && list->scrolled != 0);
+    dmvsi_var_t pos = var_named(doc, "list_scroll");
+    DMOD_TEST_EXPECT_TRUE(pos != 0);
+    if (list != NULL && list->scrolled != 0)
+    {
+        const dmvsi_action_t* a = NULL;
+        uint32_t n = flat_actions(doc, list->scrolled, &a);
+        /* Where it is first, then the listener: compared with the heights (60 = 100 - 40), scrolled back by a row */
+        DMOD_TEST_EXPECT_TRUE(n > 0 && a[0].kind == DMVSI_ACT_SET && a[0].var == pos && a[0].operand == DMVSI_VAR_SCROLL_Y);
+        bool compared = false, scrolled = false;
+        for (uint32_t i = 0; i < n; i++)
+        {
+            compared = compared || ((a[i].kind == DMVSI_ACT_IF_GE || a[i].kind == DMVSI_ACT_IF_LT) && a[i].value == 96);
+            scrolled = scrolled || (a[i].kind == DMVSI_ACT_SCROLL_Y && a[i].text != NULL && strcmp(a[i].text, "list") == 0);
+        }
+        DMOD_TEST_EXPECT_TRUE(compared);
+        DMOD_TEST_EXPECT_TRUE(scrolled);
+    }
+    dmvsi_free(doc);
+}
+
 DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
 {
     int status = -1;
