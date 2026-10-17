@@ -316,7 +316,7 @@ static bool gradient_paint(const gradient_t* g, int32_t w, int32_t h, dmvsi_pain
  * to r; blurred with the standard deviation `blur`
  */
 static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit, int16_t x, int16_t y, int32_t blur,
-                     int32_t radius)
+                     int32_t radius, dmvsi_var_t var)
 {
     if (r.w <= 0 || r.h <= 0)
         return;
@@ -324,6 +324,7 @@ static void image_in(painter_t* p, const char* path, dmvsi_rect_t r, uint8_t fit
     memset(&im, 0, sizeof(im));
     im.rect = r;
     im.path = path;
+    im.var = var;
     im.blur = blur;
     im.radius = min32(radius, min32(r.w, r.h) / 2);
     int32_t iw = 0, ih = 0;
@@ -431,7 +432,7 @@ static void paint_box(painter_t* p, const style_t* st, dmvsi_rect_t r, const int
     }
     if (st->background_url != NULL && st != p->canvas && !p->shadow)
         image_in(p, st->background_url, r, st->background_size, st->background_x, st->background_y, st->blur,
-                 whole_view(p, &r) ? 0 : radius_of(st, r.w, r.h));
+                 whole_view(p, &r) ? 0 : radius_of(st, r.w, r.h), 0);
     if (st->background_image != NULL && st != p->canvas && gradient_paint(st->background_image, r.w, r.h, &paint))
         fill(p, r, radius, &paint, st);
 
@@ -676,7 +677,12 @@ static void paint_image(painter_t* p, const node_t* n)
     dmvsi_rect_t b = inner(&r, n->box.b);
     const style_t* st = n->style;
     dmvsi_rect_t shown = inner(&b, n->box.p);
-    image_in(p, path, shown, st->object_fit, st->object_x, st->object_y, st->blur, image_radius(p, n, &shown));
+    /* data-dmod-src: the property that chooses it while the view runs */
+    const char* chooser = node_attr(n, "data-dmod-src");
+    dmvsi_var_t var = 0;
+    if (chooser != NULL && *chooser != '\0' && (var = source_var(p->c, chooser, src)) == 0)
+        WARN(p->c, "data-dmod-src: \"%s\" is no text property - not converted\n", chooser);
+    image_in(p, path, shown, st->object_fit, st->object_x, st->object_y, st->blur, image_radius(p, n, &shown), var);
 }
 
 /* An inline <svg>: its subtree as an SVG file of its content box's size */

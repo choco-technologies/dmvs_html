@@ -158,6 +158,14 @@ no script makes the property). What is in the element is painted at its
 whole width and cut at the property's end: a progress bar the application
 moves. In a browser the page's own `dmod.js` does it.
 
+`<img src="cover.png" data-dmod-src="name">` is an image the application
+chooses while the view runs (an album cover): the text property `name`
+names it as the file name of `src` without its extension does (it starts
+as `cover`), and the view shows the image it names made as `src`'s is - at
+its size, blurred, cut. Images cannot be made when the view is written, so
+todmvs tells the application which ones to make (see todmvs). Several
+images may follow one property.
+
 ## Resources
 
 Style sheets, fonts and images are files next to the page; a URL is read
