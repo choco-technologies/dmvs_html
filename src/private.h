@@ -124,6 +124,7 @@ typedef struct
 {
     dmvsi_var_t     bind[DMVSI_BIND_COUNT];
     dmvsi_handler_t click;
+    dmvsi_handler_t scrolled;                       /* It scrolls (overflow): run when it was scrolled */
     dmvsi_var_t     text;                           /* The text it shows is this variable's (0: its own) ... */
     dmvsi_var_t     number;                         /* ... and the number it is (1/1000: parseFloat(innerText)) */
     const char*     chars;                          /* ... made of these characters */
@@ -584,6 +585,7 @@ bool    image_size(const char* path, int32_t* width, int32_t* height);
 
 /* paint.c */
 int     paint_page(conv_t* c, node_t* root);
+int32_t scroll_height(const node_t* n);              /* What can be scrolled in it (its padding box down), in units */
 node_t* find_id(node_t* n, const char* id, uint32_t depth);
 dmvsi_rect_t group_rect(const conv_t* c, const node_t* n, int32_t ox, int32_t oy);
 void    view_origin(const conv_t* c, int32_t* ox, int32_t* oy);

@@ -777,6 +777,13 @@ static int32_t scroll_extent(const node_t* n)
     return (bottom > 0) ? bottom + n->box.p[2] : 0;
 }
 
+int32_t scroll_height(const node_t* n)
+{
+    int32_t content_h = n->box.content_h + n->box.p[0] + n->box.p[2];
+    int32_t extent = scroll_extent(n);
+    return (extent > content_h) ? extent : content_h;
+}
+
 static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
 {
     style_t* st = n->style;
@@ -797,16 +804,15 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
         g.flags = DMVSI_GROUP_CLIP;
         g.opacity = 255;
         g.name = n->id;
-        int32_t content_h = n->box.content_h + n->box.p[0] + n->box.p[2];
-        int32_t extent = scroll_extent(n);
-        if (extent > content_h)
-            content_h = extent;
+        int32_t content_h = scroll_height(n);
         if ((st->overflow_y == OVERFLOW_AUTO || st->overflow_y == OVERFLOW_SCROLL) && content_h > g.rect.h)
         {
             g.scroll_w = g.rect.w;
             g.scroll_h = content_h;
         }
         check(p, dmvsi_begin_group(p->c->doc, &g));
+        if (g.scroll_h != 0 && n->dynamic != NULL && n->dynamic->scrolled != 0 && !p->shadow)
+            check(p, dmvsi_on_scroll(p->c->doc, n->dynamic->scrolled));     /* A script's: where it is, its listeners */
     }
 
     layers_t* layers = arena_alloc(&p->c->arena, sizeof(layers_t));
