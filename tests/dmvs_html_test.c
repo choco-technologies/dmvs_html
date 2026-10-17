@@ -866,3 +866,48 @@ DMOD_TEST_STEP(dmvs_html_converts_css_animations)
     DMOD_TEST_EXPECT_TRUE(down >= 1u);
     dmvsi_free(doc);
 }
+
+/* data-dmod-src: a text property chooses the images while the view runs */
+DMOD_TEST_STEP(dmvs_html_converts_images_the_application_chooses)
+{
+    static const uint8_t png[33] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n', 0, 0, 0, 13, 'I', 'H', 'D', 'R',
+                                     0, 0, 0, 100, 0, 0, 0, 50, 8, 6, 0, 0, 0, 0, 0, 0, 0 };     /* 100 x 50 */
+    void* f = Dmod_FileOpen(TEST_FILE("wide.png"), "wb");
+    DMOD_TEST_EXPECT_TRUE(f != NULL);
+    if (f == NULL)
+        return;
+    Dmod_FileWrite(png, 1, sizeof(png), f);
+    Dmod_FileClose(f);
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("chosen.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { width: 200px; height: 100px }"
+        "img { display: block; object-fit: cover } .big { width: 40px; height: 40px } .small { width: 20px; height: 20px }"
+        "</style></head><body><div id=\"screen\">"
+        "<img class=\"big\" src=\"./wide.png\" data-dmod-src=\"cover\">"
+        "<img class=\"small\" src=\"wide.png\" data-dmod-src=\"cover\">"
+        "<img class=\"small\" src=\"wide.png\" data-dmod-src=\"row0.cover\">"
+        "<img class=\"small\" src=\"wide.png\">"
+        "</div></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("chosen.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+    dmvsi_var_t cover = var_named(doc, "cover"), row = var_named(doc, "row0_cover");
+    dmvsi_var_info_t info;
+    DMOD_TEST_EXPECT_TRUE(cover != 0 && dmvsi_var_info(doc, cover, &info) == 0 && info.kind == DMVSI_VAR_TEXT);
+    DMOD_TEST_EXPECT_TRUE(cover != 0 && strcmp(info.text, "wide") == 0);              /* src's name, without .png */
+    DMOD_TEST_EXPECT_TRUE(cover != 0 && strcmp(dmvsi_var_prop(doc, cover), "cover") == 0);
+    DMOD_TEST_EXPECT_TRUE(row != 0 && strcmp(dmvsi_var_prop(doc, row), "row0.cover") == 0);
+
+    /* Each image as it was - its size -, chosen by its property; one without data-dmod-src as it was */
+    const dmvsi_node_t* big = nth_image(doc, 0);
+    const dmvsi_node_t* small = nth_image(doc, 1);
+    const dmvsi_node_t* other = nth_image(doc, 2);
+    const dmvsi_node_t* plain = nth_image(doc, 3);
+    DMOD_TEST_EXPECT_TRUE(big != NULL && big->u.image.var == cover && big->u.image.width == DMVSI_PX(80));
+    DMOD_TEST_EXPECT_TRUE(small != NULL && small->u.image.var == cover && small->u.image.width == DMVSI_PX(40));
+    DMOD_TEST_EXPECT_TRUE(other != NULL && other->u.image.var == row);
+    DMOD_TEST_EXPECT_TRUE(plain != NULL && plain->u.image.var == 0);
+    dmvsi_free(doc);
+}

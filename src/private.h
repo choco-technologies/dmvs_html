@@ -598,6 +598,7 @@ node_t* built_element(conv_t* c, uint32_t k);       /* The k-th document.createE
 /* script.c */
 int     script_compile(conv_t* c);
 void    script_free(conv_t* c);                     /* The states it laid out (after painting) */
+dmvsi_var_t source_var(conv_t* c, const char* name, const char* src);  /* data-dmod-src's text property, 0: not one */
 
 /* style.c: the transition of a property (TRANSITION_POSITION, _OPACITY) - false when none */
 bool    style_transition(const style_t* st, uint8_t what, uint16_t* ms, int16_t* easing);

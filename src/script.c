@@ -40,6 +40,7 @@
 #define MAX_DOMAIN          32u
 #define MAX_PROGRAMS        32u
 #define TEXT_VAR_SIZE       64u
+#define SOURCE_VAR_SIZE     128u            /* Of a property naming an image (data-dmod-src): a path on a card */
 #define MAX_WIDE_CHARS      96u
 
 /* ---- The host's objects ---- */
@@ -2039,6 +2040,38 @@ static dmvsi_var_t prop_var(conv_t* c, const char* name, int32_t initial)
             return (info.kind == DMVSI_VAR_INT) ? v : 0;
     }
     dmvsi_var_t v = dmvsi_add_var(c->doc, name, initial);
+    if (v != 0 && dmvsi_set_prop(c->doc, v, name) != 0)
+        return 0;
+    return v;
+}
+
+/*
+ * data-dmod-src="name" (an <img>): the text property `name` chooses its
+ * image while the view runs. Its text names an image as the file name of
+ * `src` without its extension does, and the view shows that image made as
+ * `src`'s is - its size, blur, cut (todmvs: the application is told which).
+ * It starts as `src`'s name. One property, one text, any number of images.
+ */
+dmvsi_var_t source_var(conv_t* c, const char* name, const char* src)
+{
+    dmvsi_var_info_t info;
+    for (dmvsi_var_t v = 1; dmvsi_var_info(c->doc, v, &info) == 0; v++)
+    {
+        const char* prop = dmvsi_var_prop(c->doc, v);
+        if (prop != NULL && strcmp(prop, name) == 0)
+            return (info.kind == DMVSI_VAR_TEXT) ? v : 0;
+    }
+    const char* slash = strrchr(src, '/');
+    const char* base = (slash != NULL) ? slash + 1 : src;
+    const char* dot = strrchr(base, '.');
+    size_t n = (dot != NULL && dot != base) ? (size_t)(dot - base) : strlen(base);
+    char* stem = Dmod_Malloc(n + 1U);
+    if (stem == NULL)
+        return 0;
+    memcpy(stem, base, n);
+    stem[n] = '\0';
+    dmvsi_var_t v = (n < SOURCE_VAR_SIZE) ? dmvsi_add_text_var(c->doc, name, SOURCE_VAR_SIZE, stem) : 0;
+    Dmod_Free(stem);
     if (v != 0 && dmvsi_set_prop(c->doc, v, name) != 0)
         return 0;
     return v;
