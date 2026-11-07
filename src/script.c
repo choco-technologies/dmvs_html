@@ -31,7 +31,7 @@
 #define MAX_HANDLES         512u
 #define MAX_PLACES          512u
 #define MAX_HELD            64u
-#define MAX_CLICKS          64u
+#define MAX_CLICKS          256u
 #define MAX_SCROLLS         8u
 #define MAX_CLICK_CALLS     8u
 #define MAX_MODS            512u
@@ -1260,7 +1260,7 @@ static bool has_class(const node_t* n, const char* name)
 }
 
 /* The states laid out, kept for painting their looks (c->states) */
-#define MAX_STATES      256u
+#define MAX_STATES      512u
 
 typedef struct
 {
@@ -1890,6 +1890,32 @@ static int lay_out_changes(script_t* sc)
         looks[n++] = (variant_t){ e->box.placed ? e : NULL, lv->var, 0, -1 };
         for (uint32_t k = 0; k < lv->count; k++)
             looks[n++] = (variant_t){ lv->looks[k], lv->var, (int32_t)(k + 1U), -1 };
+        /* A script's class-set looks still need their own pressed state.
+         * Otherwise selecting an element this way silently disables :active. */
+        uint8_t normal_count = n;
+        if (c->has_active && listened(sc, e) && normal_count * 2U <= MAX_VARIANTS)
+        {
+            mod_t active = { e->index, MOD_ACTIVE, "", NULL };
+            for (uint8_t k = 0; k < normal_count && status == 0; k++)
+            {
+                const mod_t* classes = NULL;
+                for (uint32_t j = 0; j < sc->change_count && classes == NULL && k != 0; j++)
+                {
+                    const change_t* ch = &sc->changes[j];
+                    if (ch->element == e && ch->mod.kind == MOD_CLASSES && ch->look_index == k)
+                        classes = &ch->mod;
+                }
+                conv_t* state = run_state(sc, classes != NULL ? classes : &active,
+                                         classes != NULL ? &active : NULL, &status);
+                node_t* down = state != NULL ? element_index(state->document, e->index, 0) : NULL;
+                const node_t* normal = looks[k].node;
+                if (down == NULL || !down->box.placed || normal == NULL ||
+                    (look_of(down) == look_of(normal) && down->style->opacity == normal->style->opacity))
+                    continue;
+                looks[k].pressed = 0;
+                looks[n++] = (variant_t){ down, lv->var, k, 1 };
+            }
+        }
         for (uint8_t k = 1; k < n; k++)
             seen_like(looks[k].node, e, 0);
         memcpy(e->dynamic->variants, looks, n * sizeof(variant_t));
