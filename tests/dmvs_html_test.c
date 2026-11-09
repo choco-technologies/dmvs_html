@@ -781,6 +781,52 @@ DMOD_TEST_STEP(dmvs_html_converts_scrolling)
     dmvsi_free(doc);
 }
 
+/* Pages side by side: a scroller across, scrollLeft read and set, its content as wide as the pages */
+DMOD_TEST_STEP(dmvs_html_converts_scrolling_across)
+{
+    int status = -1;
+    DMOD_TEST_EXPECT_TRUE(write_file(TEST_FILE("across.html"),
+        "<!DOCTYPE html><html><head><style>"
+        "body { margin: 0 } #screen { width: 100px; height: 100px }"
+        "#pager { width: 100px; height: 40px; overflow-x: auto; display: flex } .pg { width: 100px; height: 40px; flex: none }"
+        "</style></head><body><div id=\"screen\"><div id=\"pager\">"
+        "<div class=\"pg\" id=\"p0\"></div><div class=\"pg\" id=\"p1\"></div>"
+        "</div></div><script>\n"
+        "const pager = document.getElementById('pager');\n"
+        "pager.addEventListener('scroll', () => {\n"
+        "  if (pager.scrollLeft >= 20) {\n"
+        "    pager.scrollLeft = 100;\n"
+        "  }\n"
+        "});\n"
+        "</script></body></html>"));
+    dmvsi_doc_t doc = convert(TEST_FILE("across.html"), "screen", 0, 0, &status);
+    DMOD_TEST_EXPECT_EQ(status, 0);
+    if (doc == NULL)
+        return;
+
+    const dmvsi_node_t* pager = scroller_named(dmvsi_root(doc), "pager");
+    DMOD_TEST_EXPECT_TRUE(pager != NULL && pager->scrolled != 0);
+    dmvsi_var_t across = var_named(doc, "pager_scrollx");
+    DMOD_TEST_EXPECT_TRUE(across != 0);
+    if (pager != NULL && pager->scrolled != 0)
+    {
+        DMOD_TEST_EXPECT_EQ(pager->u.group.scroll_w, DMVSI_PX(200));     /* two pages wide */
+        const dmvsi_action_t* a = NULL;
+        uint32_t n = flat_actions(doc, pager->scrolled, &a);
+        bool seen = false, compared = false, scrolled = false;
+        for (uint32_t i = 0; i < n; i++)
+        {
+            seen = seen || (a[i].kind == DMVSI_ACT_SET && a[i].var == across && a[i].operand == DMVSI_VAR_SCROLL_X);
+            compared = compared || (a[i].kind == DMVSI_ACT_IF_GE && a[i].var == across && a[i].value == 20);
+            scrolled = scrolled || (a[i].kind == DMVSI_ACT_SCROLL_X && a[i].value == 100 && a[i].text != NULL && strcmp(a[i].text, "pager") == 0);
+        }
+        DMOD_TEST_EXPECT_TRUE(seen);
+        DMOD_TEST_EXPECT_TRUE(compared);
+        DMOD_TEST_EXPECT_TRUE(scrolled);
+    }
+    dmvsi_free(doc);
+}
+
 DMOD_TEST_STEP(dmvs_html_converts_what_scripts_build)
 {
     int status = -1;

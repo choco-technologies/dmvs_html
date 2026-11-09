@@ -585,6 +585,7 @@ bool    image_size(const char* path, int32_t* width, int32_t* height);
 
 /* paint.c */
 int     paint_page(conv_t* c, node_t* root);
+int32_t scroll_width(const node_t* n);               /* What can be scrolled in it (its padding box across), in units */
 int32_t scroll_height(const node_t* n);              /* What can be scrolled in it (its padding box down), in units */
 node_t* find_id(node_t* n, const char* id, uint32_t depth);
 dmvsi_rect_t group_rect(const conv_t* c, const node_t* n, int32_t ox, int32_t oy);

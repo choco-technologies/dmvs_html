@@ -121,9 +121,10 @@ up.addEventListener('click', () =>               // parseFloat(innerText): the n
 - **Clicks.** `addEventListener('click', ...)`, `el.onclick = ...` and
   `onclick="..."` are a click handler. `this` is the element, and
   `el.click()` runs its handlers.
-- **Scrolling.** An element that scrolls (`overflow-y: auto` / `scroll`)
-  and has an `id`: `addEventListener('scroll', ...)` runs when it was
-  scrolled (dmview's `ON SCROLLED`), `el.scrollTop` is where it is (a
+- **Scrolling.** An element that scrolls (`overflow-y: auto` / `scroll`,
+  or `overflow-x` across: pages side by side) and has an `id`:
+  `addEventListener('scroll', ...)` runs when it was scrolled (dmview's
+  `ON SCROLLED`), `el.scrollTop` / `el.scrollLeft` is where it is (a
   variable, pixels) and setting it scrolls it (`SCROLLTO`). `scrollHeight`,
   `clientHeight`, `offsetTop`, `offsetHeight` are the layout's (pixels,
   known at conversion). A list longer than its rows: at its end the script
