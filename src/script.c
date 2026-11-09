@@ -12,7 +12,7 @@
  *   el.classList.add / remove / toggle / replace / contains      its looks
  *   el.style.opacity = '0.3'                       a style changes
  *   el.innerText = ..., parseFloat(el.innerText)   a text variable (and its number)
- *   el.addEventListener('scroll', f), el.scrollTop  where a scrolling element is (a variable), scrolled
+ *   el.addEventListener('scroll', f), el.scrollTop / scrollLeft  where a scrolling element is (a variable), scrolled
  *   el.scrollHeight, clientHeight, offsetTop, offsetHeight   as laid out (pixels)
  *   let current = null; ... current = el           elements in a variable
  *
@@ -88,7 +88,8 @@ typedef struct
 {
     node_t*         element;
     dmvsi_handler_t handler;
-    dmvsi_var_t     pos;
+    dmvsi_var_t     pos;                            /* ... down (scrollTop) */
+    dmvsi_var_t     posx;                           /* ... across (scrollLeft) */
     dmvsi_handler_t calls[MAX_CLICK_CALLS];
     uint32_t        count;
 } scroll_t;
@@ -623,7 +624,8 @@ static int add_listener(script_t* sc, node_t* e, const dmvs_js_value_t* fn)
 
 static bool scrolls(const node_t* e)
 {
-    return e->style != NULL && (e->style->overflow_y == OVERFLOW_AUTO || e->style->overflow_y == OVERFLOW_SCROLL);
+    return e->style != NULL && (e->style->overflow_y == OVERFLOW_AUTO || e->style->overflow_y == OVERFLOW_SCROLL ||
+                                e->style->overflow_x == OVERFLOW_AUTO || e->style->overflow_x == OVERFLOW_SCROLL);
 }
 
 static scroll_t* scroll_of(script_t* sc, node_t* e)
@@ -650,7 +652,9 @@ static scroll_t* scroll_of(script_t* sc, node_t* e)
     k->element = e;
     k->handler = dmvsi_new_handler(sc->c->doc);
     k->pos = dmvsi_add_var(sc->c->doc, name, 0);
-    if (k->handler == 0 || k->pos == 0)
+    Dmod_SnPrintf(name, sizeof(name), "%s_scrollx", e->id);
+    k->posx = dmvsi_add_var(sc->c->doc, name, 0);
+    if (k->handler == 0 || k->pos == 0 || k->posx == 0)
         return NULL;
     sc->scroll_count++;
     return k;
@@ -673,8 +677,8 @@ static int add_scroll_listener(script_t* sc, node_t* e, const dmvs_js_value_t* f
     return 0;
 }
 
-/* el.scrollTop = value: scrolled there, and where it is is that (until it is scrolled again) */
-static int set_scroll_top(script_t* sc, node_t* e, const dmvs_js_value_t* value)
+/* el.scrollTop / el.scrollLeft = value: scrolled there, and where it is is that (until it is scrolled again) */
+static int set_scroll(script_t* sc, node_t* e, const dmvs_js_value_t* value, bool across)
 {
     scroll_t* k = scroll_of(sc, e);
     dmvsi_var_t var = 0;
@@ -686,8 +690,8 @@ static int set_scroll_top(script_t* sc, node_t* e, const dmvs_js_value_t* value)
         report(sc, "scrolling to what is not a number - not converted");
         return 0;
     }
-    emit_op(sc, DMVSI_ACT_SCROLL_Y, 0, var, px, e->id);
-    emit_op(sc, DMVSI_ACT_SET, k->pos, var, px, NULL);
+    emit_op(sc, across ? DMVSI_ACT_SCROLL_X : DMVSI_ACT_SCROLL_Y, 0, var, px, e->id);
+    emit_op(sc, DMVSI_ACT_SET, across ? k->posx : k->pos, var, px, NULL);
     return 0;
 }
 
@@ -765,7 +769,7 @@ static int host_get(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* obj
         value->length = strlen(value->text);
         return 0;
     }
-    if (strcmp(name, "scrollTop") == 0)
+    if (strcmp(name, "scrollTop") == 0 || strcmp(name, "scrollLeft") == 0)
     {
         scroll_t* k = scroll_of(sc, e);
         if (k == NULL)
@@ -776,7 +780,7 @@ static int host_get(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* obj
         value->kind = DMVS_JS_V_RUNTIME;
         value->type = DMVS_JS_T_NUMBER;
         value->scale = 0;
-        value->var = k->pos;
+        value->var = (strcmp(name, "scrollLeft") == 0) ? k->posx : k->pos;
         return 0;
     }
     int32_t px;
@@ -1002,8 +1006,8 @@ static int host_set(void* ctx, dmvs_js_compiler_t js, const dmvs_js_value_t* obj
         return 0;                           /* As the build made it */
     if (holds_built(e) && strcmp(name, "innerHTML") == 0)
         return 0;                           /* Emptied to be built anew: as the build left it */
-    if (strcmp(name, "scrollTop") == 0)
-        return set_scroll_top(sc, e, value);
+    if (strcmp(name, "scrollTop") == 0 || strcmp(name, "scrollLeft") == 0)
+        return set_scroll(sc, e, value, strcmp(name, "scrollLeft") == 0);
     if (strcmp(name, "innerText") == 0 || strcmp(name, "textContent") == 0)
     {
         set_text(sc, e, value);
@@ -2025,11 +2029,14 @@ static int make_handlers(script_t* sc)
     {
         scroll_t* k = &sc->scrolls[i];
         sc->action_count = 0;
-        memset(&sc->actions[0], 0, sizeof(dmvsi_action_t));
+        memset(&sc->actions[0], 0, 2 * sizeof(dmvsi_action_t));
         sc->actions[0].kind = DMVSI_ACT_SET;
         sc->actions[0].var = k->pos;
         sc->actions[0].operand = DMVSI_VAR_SCROLL_Y;
-        sc->action_count = 1;
+        sc->actions[1].kind = DMVSI_ACT_SET;
+        sc->actions[1].var = k->posx;
+        sc->actions[1].operand = DMVSI_VAR_SCROLL_X;
+        sc->action_count = 2;
         for (uint32_t j = 0; j < k->count; j++)
             put_call(sc, k->calls[j]);
         if (dmvsi_set_handler(sc->c->doc, k->handler, sc->actions, sc->action_count) != 0)

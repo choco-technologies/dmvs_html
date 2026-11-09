@@ -783,6 +783,28 @@ static int32_t scroll_extent(const node_t* n)
     return (bottom > 0) ? bottom + n->box.p[2] : 0;
 }
 
+/* How far across what is in a box goes, from its padding box's left, with its right padding */
+static int32_t scroll_extent_x(const node_t* n)
+{
+    int32_t left = n->box.ax + n->box.b[3], right = 0;
+    for (const node_t* k = n->first; k != NULL; k = k->next)
+    {
+        if (k->kind != NODE_ELEMENT || !k->box.placed || k->style == NULL || k->style->display == DISPLAY_NONE)
+            continue;
+        int32_t end = k->box.ax + k->box.w + k->box.m[1] - left;
+        if (end > right)
+            right = end;
+    }
+    return (right > 0) ? right + n->box.p[1] : 0;
+}
+
+int32_t scroll_width(const node_t* n)
+{
+    int32_t content_w = n->box.content_w + n->box.p[1] + n->box.p[3];
+    int32_t extent = scroll_extent_x(n);
+    return (extent > content_w) ? extent : content_w;
+}
+
 int32_t scroll_height(const node_t* n)
 {
     int32_t content_h = n->box.content_h + n->box.p[0] + n->box.p[2];
@@ -810,11 +832,13 @@ static void paint_inner(painter_t* p, node_t* n, uint32_t depth)
         g.flags = DMVSI_GROUP_CLIP;
         g.opacity = 255;
         g.name = n->id;
-        int32_t content_h = scroll_height(n);
-        if ((st->overflow_y == OVERFLOW_AUTO || st->overflow_y == OVERFLOW_SCROLL) && content_h > g.rect.h)
+        int32_t content_h = scroll_height(n), content_w = scroll_width(n);
+        bool down = (st->overflow_y == OVERFLOW_AUTO || st->overflow_y == OVERFLOW_SCROLL) && content_h > g.rect.h;
+        bool across = (st->overflow_x == OVERFLOW_AUTO || st->overflow_x == OVERFLOW_SCROLL) && content_w > g.rect.w;
+        if (down || across)
         {
-            g.scroll_w = g.rect.w;
-            g.scroll_h = content_h;
+            g.scroll_w = across ? content_w : g.rect.w;
+            g.scroll_h = down ? content_h : g.rect.h;
         }
         check(p, dmvsi_begin_group(p->c->doc, &g));
         if (g.scroll_h != 0 && n->dynamic != NULL && n->dynamic->scrolled != 0 && !p->shadow)
