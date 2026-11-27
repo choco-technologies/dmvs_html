@@ -14,3 +14,5 @@ Play CDN), Font Awesome and Inter from Google Fonts - the page as it is,
 | `https://fonts.googleapis.com/css2` | `inter.css` - `@font-face` of `fonts/Inter-*.otf`, Inter cut down to the characters of the page (SIL OFL, `fonts/LICENSE-Inter.txt`) |
 
 The expected boxes in the test are the ones Chrome lays the page out in.
+
+`dmodos-480x800.html` is the same page for a 480 x 800 screen (the 800 x 480 panel of the Elecrow DIS08070H turned by 90 degrees): only the size of `#os-screen` and the height of the home screen differ. The test does not use it; it is the source of the `dmodos-480x800` example of dmview (made with `todmvs`).
